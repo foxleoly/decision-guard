@@ -1,0 +1,8 @@
+# Local session handoffs (paths and state of one machine): never commit
+handoff/
+
+# Rust crate build output (CARGO_TARGET_DIR is normally outside the repo; Cargo.lock IS committed)
+rust/target/
+
+# dist/ holds the committed prebuilt binaries; the repo-wide "dist/" rule must not hide them
+!dist/

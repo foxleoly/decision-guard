@@ -1,0 +1,48 @@
+[package]
+name = "decision-guard"
+version = "0.1.0"
+edition = "2021"
+description = "decision-guard hook: judges an agent's shell command before it runs"
+publish = false
+
+[lib]
+name = "decision_guard"
+path = "src/lib.rs"
+
+[[bin]]
+name = "decision-guard"
+path = "src/main.rs"
+
+[dependencies]
+# preserve_order: JSON objects keep insertion order, as JSON.stringify does (request bodies, cache.json, hook output).
+# float_roundtrip: parse floats exactly (the default parser can be 1 ULP off, which showed in the viewer's p_destructive).
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+# No Unicode tables: every pattern spells out its own classes, so matching stays identical to the JS regexes.
+regex = { version = "1", default-features = false, features = ["std", "perf"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# The viewer's page token and nonce (getrandom + base64) and its constant-time token compare (subtle): the same
+# versions rustls and ureq already link, so they add no code.
+getrandom = { version = "0.2", default-features = false }
+base64 = { version = "0.23", default-features = false, features = ["alloc"] }
+subtle = { version = "2", default-features = false }
+# WHATWG URL parsing for the base URL (about 200 KB: it carries the IDNA tables) and form_urlencoded for the viewer's query.
+url = { version = "2.5", default-features = false, features = ["std"] }
+# Date arithmetic only (no formatting, no std): the ISO timestamps.
+time = { version = "0.3", default-features = false }
+# Python parser for the read-only fast path (src/pyproof.rs): a C parser compiled by the same cc that rusqlite needs, no
+# async runtime, no OpenSSL. The language crate is capped below 0.1.8, which needs rustc 1.90 (the toolchain here is 1.88).
+tree-sitter = { version = "0.26", default-features = false }
+tree-sitter-python = "0.25"
+tree-sitter-language = ">=0.1.5, <0.1.8"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+
+[dev-dependencies]
+# Test-only: the fake model server shares its request log between threads.
+parking_lot = "0.12"

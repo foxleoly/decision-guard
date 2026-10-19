@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>decision-guard</title>
+<style nonce="__NONCE__">
+:root{--bg:#07182D;--surface:#0b1319;--surface-hover:#111b23;--border:#1a2730;--text:#e8ecf4;--text-dim:#7a8ea8;--accent:#0A60FF;--green:#00C853;--yellow:#E5AC00;--red:#FF007F;--orange:#FF9000;--mono:ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace}
+[data-theme="light"]{--bg:#F9F9FA;--surface:#FFFFFF;--surface-hover:#E2EBF8;--border:#E5E5E5;--text:#212121;--text-dim:#536070;--accent:#0A60FF;--green:#00A846;--yellow:#B88400;--red:#CC0066;--orange:#D97A00}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;background:var(--bg);background-image:radial-gradient(ellipse at 50% 0%,rgba(10,96,255,.08) 0%,transparent 60%);color:var(--text);font-size:14px;line-height:1.45;min-height:100vh}
+[data-theme="light"] body{background-image:none}
+.header-bar{position:sticky;top:0;z-index:100;background:rgba(7,24,45,.95);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid var(--border);box-shadow:0 1px 16px rgba(10,96,255,.06)}
+[data-theme="light"] .header-bar{background:rgba(255,255,255,.92);box-shadow:0 1px 8px rgba(0,0,0,.06)}
+.header-inner{display:flex;align-items:center;justify-content:space-between;max-width:1280px;margin:0 auto;padding:0 32px}
+h1{font-size:1.5rem;font-weight:900;letter-spacing:-.02em;padding:16px 0}
+.tab-bar{display:flex;position:relative;align-self:stretch}
+.tab-btn{background:transparent;border:none;padding:20px 18px;cursor:pointer;color:var(--text-dim);font-family:inherit;font-weight:500;font-size:.88rem;letter-spacing:.03em;transition:color .2s}
+.tab-btn:hover{color:var(--text)}.tab-btn.active{color:var(--text);font-weight:700}
+.tab-indicator{position:absolute;bottom:0;height:2px;background:var(--accent);border-radius:1px 1px 0 0;transition:left .35s cubic-bezier(.4,0,.2,1),width .35s cubic-bezier(.4,0,.2,1);pointer-events:none}
+.header-actions{display:flex;gap:6px;align-items:center;padding-left:16px;border-left:1px solid var(--border)}
+.theme-toggle{background:transparent;border:none;padding:6px 10px;cursor:pointer;color:var(--text-dim);font-family:inherit;font-size:.9rem;transition:color .2s}.theme-toggle:hover{color:var(--text)}
+.live{display:flex;align-items:center;gap:6px;color:var(--text-dim);font-size:.78rem;cursor:pointer;user-select:none}
+.switch{position:relative;width:30px;height:16px;background:var(--border);border-radius:8px;transition:background .2s}.switch::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;background:#fff;border-radius:50%;transition:left .2s}
+.live input{display:none}.live input:checked+.switch{background:var(--accent)}.live input:checked+.switch::after{left:16px}
+main{max-width:1280px;margin:28px auto;padding:0 32px 40px}
+.tab-content{display:none}.tab-content.active{display:block}
+.panels{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px;transition:border-color .2s,box-shadow .2s;min-width:0}
+.panel:hover{border-color:#243540;box-shadow:0 2px 16px rgba(0,0,0,.2)}[data-theme="light"] .panel:hover{border-color:#d4d8de;box-shadow:0 2px 12px rgba(0,0,0,.06)}
+.panel.full{grid-column:1/-1}
+.panel h2{font-size:.85rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:14px;color:var(--text-dim);padding-left:12px;border-left:3px solid var(--accent);cursor:pointer;user-select:none;position:relative;padding-right:24px;display:flex;align-items:center;gap:8px}
+.panel h2::after{content:"";position:absolute;right:4px;top:50%;width:6px;height:6px;border-left:1.5px solid var(--text-dim);border-bottom:1.5px solid var(--text-dim);transform:translateY(-70%) rotate(135deg);transition:transform .2s}
+.panel.collapsed h2::after{transform:translateY(-30%) rotate(-45deg)}.panel.collapsed .panel-body{display:none}.panel.collapsed h2{margin-bottom:0}.panel.collapsed{align-self:start}
+.kv{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:6px 0;font-size:.85rem;border-radius:4px;transition:background .15s}.kv:hover{background:var(--surface-hover)}
+.kv .label{color:var(--text-dim);white-space:nowrap}.kv .value{text-align:right;word-break:break-all}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.dot.green{background:var(--green);box-shadow:0 0 6px var(--green)}.dot.red{background:var(--red);box-shadow:0 0 6px var(--red)}.dot.yellow{background:var(--yellow)}
+.bars .row{display:grid;grid-template-columns:130px 1fr 90px;gap:10px;align-items:center;padding:4px 0;font-size:.85rem}
+.bars .row span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bars .row span:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.track{height:12px;background:var(--border);border-radius:3px;overflow:hidden}.track i{display:block;height:100%;background:var(--accent);border-radius:3px}.track i.warn{background:var(--orange)}
+.hours{display:grid;grid-template-columns:repeat(24,1fr);gap:3px}.hours i{height:26px;border-radius:3px;background:var(--border)}.hours-labels{display:grid;grid-template-columns:repeat(8,1fr);font-size:.72rem;color:var(--text-dim);margin-top:4px}
+.days{display:flex;align-items:flex-end;gap:5px;height:90px}.days div{flex:1 1 0;max-width:44px;display:flex;flex-direction:column;justify-content:flex-end;height:100%}.days i{display:block;border-radius:2px 2px 0 0;background:var(--orange);min-height:2px}.days b{display:block;border-radius:2px 2px 0 0;background:var(--border)}
+.days-labels{display:flex;gap:5px;font-size:.68rem;color:var(--text-dim);margin-top:4px}.days-labels span{flex:1 1 0;max-width:44px;text-align:center}
+.sub{font-size:.78rem;color:var(--text-dim);margin:2px 0 8px}
+.badge{display:inline-block;padding:1px 9px;border-radius:10px;font-size:.72rem;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+.badge.ask{background:rgba(229,172,0,.16);color:var(--yellow)}.badge.deny{background:rgba(255,0,127,.14);color:var(--red)}.badge.allow{background:rgba(0,200,83,.12);color:var(--green)}.badge.count{background:rgba(255,0,127,.14);color:var(--red);margin-left:6px}
+.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;font-size:.85rem}
+select,input[type=search]{font:inherit;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text)}input[type=search]{flex:1;min-width:220px}
+select:focus,input:focus{outline:none;border-color:var(--accent)}
+button.btn{font:inherit;font-size:.82rem;padding:5px 14px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text);cursor:pointer}button.btn:hover{border-color:var(--accent);color:var(--accent)}
+table{border-collapse:collapse;width:100%}th{text-align:left;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--text-dim);font-weight:600;padding:8px;border-bottom:1px solid var(--border)}
+td{padding:8px;border-bottom:1px solid var(--border);vertical-align:top;font-size:.85rem}tr.row{cursor:pointer}tr.row:hover td{background:var(--surface-hover)}
+td.cmd,.mono{font-family:var(--mono);font-size:.8rem}td.cmd{max-width:520px;white-space:pre-wrap;word-break:break-all}
+.meter{display:inline-block;width:46px;height:7px;background:var(--border);border-radius:4px;vertical-align:middle;margin-right:6px;overflow:hidden}.meter i{display:block;height:100%;background:var(--red)}
+tr.detail td{background:var(--surface-hover)}tr.detail pre{margin:0 0 8px;white-space:pre-wrap;word-break:break-all;font-family:var(--mono);font-size:.8rem}
+dl{display:grid;grid-template-columns:130px 1fr;gap:2px 10px}dt{color:var(--text-dim)}dd{word-break:break-all}
+details.call{margin:8px 0;border:1px solid var(--border);border-radius:6px;padding:4px 10px;background:var(--surface)}details.call summary{cursor:pointer}details.call h4{margin:8px 0 2px;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--text-dim)}
+.bad{color:var(--red)}.note{color:var(--text-dim);margin:8px 0 0}.empty{padding:36px;text-align:center;color:var(--text-dim)}.more{text-align:center;margin-top:12px}
+.top .item{display:grid;grid-template-columns:42px 1fr;gap:10px;padding:5px 0;align-items:start;cursor:pointer;border-radius:4px}.top .item:hover{background:var(--surface-hover)}.top .item .mono{white-space:pre-wrap;word-break:break-all}
+@media(max-width:860px){.panels{grid-template-columns:1fr}.header-inner{flex-wrap:wrap;padding:0 16px}main{padding:0 16px 40px}}
+</style></head>
+<body>
+<div class="header-bar"><div class="header-inner">
+  <h1>decision-guard</h1>
+  <div class="tab-bar" id="tabs">
+    <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+    <button class="tab-btn" data-tab="commands">Commands</button>
+    <button class="tab-btn" data-tab="rules">Rules</button>
+    <div class="tab-indicator" id="indicator"></div>
+  </div>
+  <div class="header-actions">
+    <label class="live"><input id="live" type="checkbox"><span class="switch"></span>Live</label>
+    <button class="theme-toggle" id="theme" aria-label="Toggle theme"></button>
+  </div>
+</div></div>
+<main>
+  <div class="tab-content active" id="tab-dashboard"><div class="panels" id="panels"></div></div>
+  <div class="tab-content" id="tab-commands">
+    <section class="panel">
+      <h2 id="cmd-title">Commands</h2>
+      <div class="panel-body">
+        <div class="filters">
+          <select id="view"><option value="dangerous">Asked or denied</option><option value="unjudged">Not judged</option><option value="all">Everything</option></select>
+          <select id="agent"><option value="">All agents</option></select>
+          <select id="rule"><option value="">Any rule</option><option value="denylist">denylist</option><option value="user-deny">user-deny</option><option value="dir-delete">dir-delete</option><option value="exfiltration">exfiltration</option><option value="allowlist">allowlist</option><option value="readonly">readonly</option></select>
+          <select id="source"><option value="">Any source</option><option>rule</option><option>api</option><option>cache</option><option>no_service</option><option>error</option></select>
+          <input id="q" type="search" placeholder="Search command or directory...">
+          <button class="btn" id="reload">Reload</button>
+        </div>
+        <table><thead><tr><th>Time</th><th>Agent</th><th>Decision</th><th>Why</th><th>P(destr.)</th><th>Command</th></tr></thead><tbody id="rows"></tbody></table>
+        <div class="empty" id="empty" hidden>Nothing recorded for this filter.</div>
+        <div class="more"><button class="btn" id="more" hidden>Load More</button></div>
+      </div>
+    </section>
+  </div>
+  <div class="tab-content" id="tab-rules">
+    <section class="panel full">
+      <h2>Rules</h2>
+      <div class="panel-body">
+        <p class="sub">One glob pattern per line. <code>*</code> matches any run of characters; everything else is literal. Deny always wins over allow, the built-in deny list and the delete/exfiltration rules, and over any allow entry.</p>
+        <div class="panels">
+          <div>
+            <p class="sub">Allow (never overrides deny, the built-in list, or the delete/exfiltration rules; only applies to a command with no <code>; &amp; | &lt; &gt; ` $ ( ) \</code> or newline)</p>
+            <textarea id="allow-text" rows="8" style="width:100%;font-family:var(--mono);font-size:.82rem;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px"></textarea>
+            <ul id="allow-errors" class="note bad"></ul>
+          </div>
+          <div>
+            <p class="sub">Deny (matches the whole command or any part of a chain split on <code>; &amp; | &amp;&amp; ||</code> or a newline)</p>
+            <textarea id="deny-text" rows="8" style="width:100%;font-family:var(--mono);font-size:.82rem;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px"></textarea>
+            <ul id="deny-errors" class="note bad"></ul>
+          </div>
+        </div>
+        <p><button class="btn" id="rules-save">Save</button> <span id="rules-status" class="note"></span></p>
+        <h2 style="margin-top:20px">Read-only fast path</h2>
+        <p class="sub">A command is allowed without asking the model only when every part of it is proven read-only. Deny rules, the built-in list and the delete/exfiltration rules are checked first, and a command that cannot be proven still goes to the model.</p>
+        <p><label><input type="checkbox" id="readonly-on"> Enable the read-only fast path (saved with the Save button)</label></p>
+        <p id="readonly-env" class="note bad"></p>
+        <table><thead><tr><th colspan="6">Built-in tools (fixed, cannot be edited)</th></tr></thead><tbody id="readonly-tools"></tbody></table>
+        <h2 style="margin-top:20px">Built-in deny list (fixed, cannot be edited)</h2>
+        <table><thead><tr><th>Name</th><th>Description</th></tr></thead><tbody id="builtin-rows"></tbody></table>
+        <h2 style="margin-top:20px">Test a command</h2>
+        <div class="filters">
+          <input id="check-command" type="search" placeholder="Command to test against the textareas above...">
+          <button class="btn" id="check-run">Test</button>
+        </div>
+        <dl id="check-result"></dl>
+      </div>
+    </section>
+  </div>
+
+</main>
+<script nonce="__NONCE__">
+(function () {
+"use strict";
+var $ = function (id) { return document.getElementById(id); };
+function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function get(path, params) { return fetch(path + (params ? "?" + new URLSearchParams(params) : ""), { cache: "no-store" }).then(function (r) { return r.json(); }); }
+var DG_TOKEN = "__TOKEN__";
+function post(path, body) {
+  return fetch(path, { method: "POST", cache: "no-store", headers: { "content-type": "application/json", "x-dg-token": DG_TOKEN }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); });
+}
+function lines(text) { return text.split("\n").map(function (s) { return s.trim(); }).filter(Boolean); }
+function when(ts) { var d = new Date(ts); return isNaN(d) ? ts : d.toLocaleString(); }
+function kb(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : (n / 1024).toFixed(0) + " KB"; }
+
+/* ── theme ─────────────────────────────────────────────────────────────── */
+function applyTheme(t) { document.documentElement.setAttribute("data-theme", t); $("theme").textContent = t === "dark" ? "\u263E" : "\u2600"; }
+applyTheme(localStorage.getItem("dg-theme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"));
+$("theme").addEventListener("click", function () { var t = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark"; localStorage.setItem("dg-theme", t); applyTheme(t); });
+
+/* ── tabs ──────────────────────────────────────────────────────────────── */
+var current = "dashboard";
+function moveIndicator() { var b = document.querySelector(".tab-btn.active"); $("indicator").style.left = b.offsetLeft + "px"; $("indicator").style.width = b.offsetWidth + "px"; }
+function showTab(name, replace) {
+  current = name;
+  document.querySelectorAll(".tab-btn").forEach(function (b) { b.classList.toggle("active", b.dataset.tab === name); });
+  document.querySelectorAll(".tab-content").forEach(function (c) { c.classList.toggle("active", c.id === "tab-" + name); });
+  if (!replace) history.replaceState(null, "", "#" + name);
+  moveIndicator();
+  refresh();
+}
+document.querySelectorAll(".tab-btn").forEach(function (b) { b.addEventListener("click", function () { showTab(b.dataset.tab); }); });
+window.addEventListener("resize", moveIndicator);
+
+/* ── dashboard ─────────────────────────────────────────────────────────── */
+function panel(title, body, full) {
+  var p = el("section", "panel" + (full ? " full" : ""));
+  var h = el("h2", "", title); var b = el("div", "panel-body");
+  b.append.apply(b, body);
+  h.addEventListener("click", function () { p.classList.toggle("collapsed"); });
+  p.append(h, b);
+  return p;
+}
+function kv(label, value, status) {
+  var r = el("div", "kv"); var v = el("span", "value");
+  if (status) v.append(el("span", "dot " + status));
+  if (value instanceof Node) v.append(value); else v.append(document.createTextNode(String(value)));
+  r.append(el("span", "label", label), v);
+  return r;
+}
+function link(text, fn) { var a = el("button", "btn", text); a.addEventListener("click", fn); return a; }
+function badge(kind, text) { return el("span", "badge " + kind, text); }
+function bars(items, warn) {
+  var max = Math.max.apply(null, [1].concat(items.map(function (i) { return i.value; })));
+  var wrap = el("div", "bars");
+  items.forEach(function (i) {
+    var row = el("div", "row"); var track = el("div", "track"); var f = el("i", warn ? "warn" : "");
+    f.style.width = Math.max(2, Math.round((i.value / max) * 100)) + "%"; track.append(f);
+    row.append(el("span", "", i.label), track, el("span", "", i.text != null ? i.text : String(i.value))); wrap.append(row);
+  });
+  if (!items.length) wrap.append(el("p", "note", "Nothing recorded yet."));
+  return wrap;
+}
+function hoursPanel(s) {
+  var map = {}; s.hours.forEach(function (h) { map[h.hour] = h; });
+  var now = new Date(); var grid = el("div", "hours"); var max = Math.max.apply(null, [1].concat(s.hours.map(function (h) { return h.dangerous || 0; })));
+  for (var k = 23; k >= 0; k--) {
+    var d = new Date(now.getTime() - k * 3600000); var key = d.toISOString().slice(0, 13); var h = map[key] || { total: 0, dangerous: 0 };
+    var c = el("i"); var dn = h.dangerous || 0;
+    if (dn) c.style.background = "var(--orange)", c.style.opacity = String(0.35 + 0.65 * dn / max);
+    else if (h.total) c.style.background = "var(--accent)", c.style.opacity = "0.45";
+    c.title = d.getHours() + ":00  " + dn + " asked or denied of " + h.total; grid.append(c);
+  }
+  var labels = el("div", "hours-labels");
+  for (var j = 0; j < 8; j++) labels.append(el("span", "", ((now.getHours() - 23 + j * 3 + 48) % 24) + ""));
+  return [el("p", "sub", "Hourly commands, last 24h (orange = asked or denied, blue = allowed)"), grid, labels];
+}
+function daysPanel(s) {
+  var days = s.days.slice().reverse(); var max = Math.max.apply(null, [1].concat(days.map(function (d) { return d.total; })));
+  var chart = el("div", "days"); var labels = el("div", "days-labels");
+  days.forEach(function (d) {
+    var col = el("div"); var ok = el("b"); var bad = el("i");
+    bad.style.height = Math.round(((d.dangerous || 0) / max) * 78) + "px"; ok.style.height = Math.round(((d.total - (d.dangerous || 0)) / max) * 78) + "px";
+    col.title = d.day + ": " + d.total + " commands, " + (d.dangerous || 0) + " asked or denied"; col.append(bad, ok); chart.append(col);
+    labels.append(el("span", "", d.day.slice(5)));
+  });
+  return days.length ? [el("p", "sub", "Commands per day, last 14 days"), chart, labels] : [el("p", "note", "Nothing recorded yet.")];
+}
+function openCommands(filters) { Object.keys(filters).forEach(function (k) { $(k).value = filters[k]; }); showTab("commands"); }
+
+function renderDashboard(s, st) {
+  var svc = st.service, panels = $("panels");
+  var status = [
+    kv("Service", svc.error ? "not configured" : svc.name, svc.error ? "red" : "green"),
+    kv("Model", svc.error ? "-" : svc.model),
+    kv("Endpoint", svc.error ? "-" : svc.url),
+    kv("Credential", svc.error ? "-" : (svc.has_key ? "set" : "none")),
+    kv("Asks at P(destructive)", "\u2265 " + st.thresholds.askP.toFixed(2)),
+    kv("Skips if user asked", "\u2265 " + st.thresholds.userP.toFixed(2)),
+    kv("Unjudged commands", st.fail_closed ? "denied (fail-closed)" : "allowed")
+  ];
+  if (svc.error) status.push(el("p", "note bad", svc.error));
+  var dangerous = (s.asked || 0) + (s.denied || 0);
+  var decisions = [
+    kv("Recorded", s.total || 0),
+    kv("Asked", badge("ask", String(s.asked || 0))),
+    kv("Denied", badge("deny", String(s.denied || 0))),
+    kv("Not judged", badge(s.unjudged ? "deny" : "allow", String(s.unjudged || 0)), s.unjudged ? "yellow" : "green"),
+    kv("Asked or denied", s.total ? Math.round(100 * dangerous / s.total) + "%" : "-"),
+    el("div", "kv", "")
+  ];
+  decisions[decisions.length - 1].append(link("View asked or denied", function () { openCommands({ view: "dangerous", agent: "", rule: "", source: "", q: "" }); }), link("View not judged", function () { openCommands({ view: "unjudged", agent: "", rule: "", source: "", q: "" }); }));
+  var lat = s.latency;
+  var top = el("div", "top");
+  s.top.forEach(function (t) {
+    var item = el("div", "item"); item.append(badge(t.action === "deny" ? "deny" : "ask", "\u00d7" + t.n), el("span", "mono", t.command));
+    item.addEventListener("click", function () { openCommands({ view: "dangerous", agent: "", rule: "", source: "", q: t.command.slice(0, 60) }); }); top.append(item);
+  });
+  if (!s.top.length) top.append(el("p", "note", "Nothing asked about yet."));
+  var db = st.database, ar = st.archives;
+  panels.replaceChildren(
+    panel("Status", status), panel("Decisions", decisions),
+    panel("Activity", hoursPanel(s)), panel("Daily", daysPanel(s)),
+    panel("By agent", [bars(s.agents.map(function (a) { return { label: a.agent, value: a.total, text: a.total + " (" + (a.dangerous || 0) + " asked)" }; }))]),
+    panel("Decided by", [bars(s.sources.map(function (x) { return { label: x.source, value: x.n }; })), s.rules.length ? el("p", "sub", "Rules") : el("span"), bars(s.rules.map(function (x) { return { label: x.rule, value: x.n }; }), true)]),
+    panel("Service latency", [kv("Requests answered", lat.n), kv("p50", lat.p50 == null ? "-" : lat.p50 + " ms"), kv("p95", lat.p95 == null ? "-" : lat.p95 + " ms"), kv("Failed requests", badge(lat.errors ? "deny" : "allow", String(lat.errors)))]),
+    panel("Storage", [kv("Database", kb(db.bytes)), kv("Decisions", db.decisions), kv("API calls", db.api_calls), kv("Prompts", db.prompts), kv("Archives", ar.count ? ar.count + " file(s), " + kb(ar.bytes) : "none yet"), kv("Latest archive", ar.latest || "-")]),
+    panel("Most asked commands", [top], true)
+  );
+}
+
+/* ── commands ──────────────────────────────────────────────────────────── */
+var state = { rows: [], hasMore: false };
+function filters() { var o = {}; ["view", "agent", "rule", "source", "q"].forEach(function (k) { if ($(k).value) o[k] = $(k).value; }); return o; }
+var pretty = function (s) { try { return JSON.stringify(JSON.parse(s), null, 2); } catch (e) { return s == null ? "" : s; } };
+function renderCall(c) {
+  var d = el("details", "call"); var failed = c.error || c.status == null || c.status >= 400;
+  var head = c.purpose + " \u00b7 " + (c.status == null ? "no response" : c.status) + " \u00b7 " + (c.latency_ms == null ? "?" : c.latency_ms) + " ms" + (c.error ? " \u00b7 " + c.error : "");
+  d.append(el("summary", failed ? "bad" : "", head), el("h4", "", "POST " + c.url), el("h4", "", "Request"), el("pre", "", pretty(c.request)), el("h4", "", "Response"), el("pre", "", pretty(c.response)));
+  return d;
+}
+function renderRow(r) {
+  var tr = el("tr", "row");
+  var why = r.source === "rule" ? "rule: " + (r.rule || "dir-delete") : r.source === "cache" ? "model (cached)" : r.source === "api" ? "model" : r.source;
+  var dec = el("td"); dec.append(badge(r.action, r.action));
+  var pc = el("td");
+  if (r.p_destructive != null) { var m = el("span", "meter"); var f = el("i"); f.style.width = Math.round(r.p_destructive * 100) + "%"; m.append(f); pc.append(m, document.createTextNode(r.p_destructive.toFixed(2))); }
+  tr.append(el("td", "", when(r.ts)), el("td", "", r.agent), dec, el("td", "", why), pc, el("td", "cmd", r.command.length > 220 ? r.command.slice(0, 220) + "\u2026" : r.command));
+  var detail = el("tr", "detail"); detail.hidden = true;
+  var td = el("td"); td.colSpan = 6; var dl = el("dl");
+  function add(k, v) { if (v != null && v !== "") dl.append(el("dt", "", k), el("dd", "", String(v))); }
+  add("Directory", r.cwd); add("Session", r.session_id); add("Model", [r.provider, r.model].filter(Boolean).join(" / "));
+  add("Verdict", r.choice ? r.choice + (r.confidence != null ? " (confidence " + r.confidence.toFixed(2) + ")" : "") : "");
+  add("User asked for it", r.user_requested != null ? r.user_requested.toFixed(2) : ""); add("Latency", r.latency_ms != null ? r.latency_ms + " ms" : "");
+  add("Tokens", r.input_tokens); add("Error", r.error); add("Row", "#" + r.id);
+  var callBox = el("div"); td.append(el("pre", "", r.command), dl, callBox); detail.append(td);
+  var loaded = false;
+  tr.addEventListener("click", function () {
+    detail.hidden = !detail.hidden;
+    if (detail.hidden || loaded) return;
+    loaded = true;
+    get("/api/calls", { decision: String(r.id) }).then(function (list) {
+      callBox.replaceChildren.apply(callBox, list.length ? list.map(renderCall) : [el("p", "note", r.source === "rule" ? "No request was sent: a rule decided this." : r.source === "cache" ? "No request was sent: answered from the cache." : "No request was recorded for this row.")]);
+    });
+  });
+  return [tr, detail];
+}
+function renderRows() {
+  var nodes = []; state.rows.forEach(function (r) { nodes = nodes.concat(renderRow(r)); });
+  $("rows").replaceChildren.apply($("rows"), nodes);
+  $("empty").hidden = state.rows.length > 0; $("more").hidden = !state.hasMore;
+  $("cmd-title").replaceChildren(document.createTextNode("Commands"), badge("count", state.rows.length + (state.hasMore ? "+" : "")));
+}
+function loadCommands(append) {
+  var p = filters(); p.limit = "100";
+  if (append && state.rows.length) p.before = String(state.rows[state.rows.length - 1].id);
+  return get("/api/decisions", p).then(function (d) { state.rows = append ? state.rows.concat(d.rows) : d.rows; state.hasMore = d.hasMore; renderRows(); });
+}
+["view", "agent", "rule", "source"].forEach(function (id) { $(id).addEventListener("change", function () { loadCommands(false); }); });
+var typing; $("q").addEventListener("input", function () { clearTimeout(typing); typing = setTimeout(function () { loadCommands(false); }, 250); });
+$("reload").addEventListener("click", function () { refresh(); });
+$("more").addEventListener("click", function () { loadCommands(true); });
+
+/* ── rules ─────────────────────────────────────────────────────────────── */
+var rulesLoaded = false;
+function renderRuleErrors(id, list, errors) {
+  var ul = $(id); ul.replaceChildren();
+  errors.forEach(function (e) { ul.append(el("li", "", "Line " + (e.index + 1) + " (\"" + e.pattern + "\"): " + e.message)); });
+}
+function loadRules() {
+  return get("/api/rules").then(function (r) {
+    $("allow-text").value = r.allow.join("\n");
+    $("deny-text").value = r.deny.join("\n");
+    $("builtin-rows").replaceChildren.apply($("builtin-rows"), r.builtin.map(function (b) {
+      var tr = el("tr"); tr.append(el("td", "mono", b.name), el("td", "", b.description)); return tr;
+    }));
+    $("readonly-on").checked = r.readonly.enabled;
+    $("readonly-env").textContent = r.readonly.forced_by_env ? "DECISION_GUARD_READONLY is set in the environment of the hook and overrides this setting." : "";
+    var tools = $("readonly-tools"), rows = [];
+    for (var i = 0; i < r.readonly.tools.length; i += 6) {
+      var row = el("tr");
+      r.readonly.tools.slice(i, i + 6).forEach(function (n) { row.append(el("td", "mono", n)); });
+      rows.push(row);
+    }
+    tools.replaceChildren.apply(tools, rows);
+    rulesLoaded = true;
+  });
+}
+$("rules-save").addEventListener("click", function () {
+  var allow = lines($("allow-text").value), deny = lines($("deny-text").value);
+  post("/api/rules", { allow: allow, deny: deny, readonly: $("readonly-on").checked }).then(function (res) {
+    if (!res.ok) {
+      $("rules-status").textContent = "";
+      renderRuleErrors("allow-errors", allow, res.body.errors.filter(function (e) { return e.list === "allow"; }));
+      renderRuleErrors("deny-errors", deny, res.body.errors.filter(function (e) { return e.list === "deny"; }));
+      return;
+    }
+    renderRuleErrors("allow-errors", allow, []); renderRuleErrors("deny-errors", deny, []);
+    $("allow-text").value = res.body.allow.join("\n"); $("deny-text").value = res.body.deny.join("\n");
+    $("rules-status").textContent = "Saved.";
+  });
+});
+$("check-run").addEventListener("click", function () {
+  var command = $("check-command").value;
+  post("/api/check", { command: command, allow: lines($("allow-text").value), deny: lines($("deny-text").value), readonly: $("readonly-on").checked }).then(function (res) {
+    var dl = $("check-result"); dl.replaceChildren();
+    function add(k, v) { if (v != null && v !== "") dl.append(el("dt", "", k), el("dd", "", String(v))); }
+    if (!res.ok) { add("Error", JSON.stringify(res.body)); return; }
+    add("Stage", res.body.stage); add("Action", res.body.action || "(model would be asked)");
+    add("Rule", res.body.rule); add("Matching pattern", res.body.pattern); add("Reason", res.body.reason);
+  });
+});
+
+/* ── refresh ───────────────────────────────────────────────────────────── */
+function refresh() {
+  return Promise.all([get("/api/summary"), get("/api/status")]).then(function (r) {
+    var s = r[0]; var have = {}; Array.prototype.forEach.call($("agent").options, function (o) { have[o.value] = 1; });
+    s.agents.forEach(function (a) { if (!have[a.agent]) $("agent").append(new Option(a.agent, a.agent)); });
+    if (current === "dashboard") renderDashboard(s, r[1]);
+    if (current === "commands") return loadCommands(false);
+    if (current === "rules" && !rulesLoaded) return loadRules();
+  });
+}
+var timer;
+$("live").addEventListener("change", function () { clearInterval(timer); if ($("live").checked) timer = setInterval(refresh, 10000); });
+showTab(["commands", "rules"].indexOf(location.hash.replace("#", "")) >= 0 ? location.hash.replace("#", "") : "dashboard", true);
+})();
+</script>
+</body></html>
