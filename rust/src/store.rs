@@ -5,7 +5,6 @@ use crate::jsc::{iso_now, slice_utf16, state_dir, trim};
 use crate::judge::{Call, Service};
 use rusqlite::{params, Connection};
 use std::collections::HashSet;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -92,7 +91,7 @@ pub fn with_db<T>(f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> Option<
         f(&db)
     })()
     .ok();
-    let _ = std::fs::set_permissions(db_path(), std::fs::Permissions::from_mode(0o600));
+    let _ = crate::fsx::restrict(&db_path());
     result
 }
 

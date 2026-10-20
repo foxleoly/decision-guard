@@ -8,7 +8,6 @@ use crate::jsc::opt;
 use crate::judge::{config_path, read_json, resolve_service};
 use serde_json::{json, Map, Value};
 use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// Runs the subcommand; returns the process exit code. Prints to stdout, errors to stderr.
@@ -120,13 +119,8 @@ fn write_config(path: &Path, map: &Map<String, Value>) -> std::io::Result<()> {
     tmp.push(format!(".{}", std::process::id()));
     let tmp = PathBuf::from(tmp);
     let written = (|| {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        let mut f = crate::fsx::create_private(&tmp)?;
+        crate::fsx::restrict(&tmp)?;
         f.write_all(serde_json::to_string_pretty(&Value::Object(map.clone()))?.as_bytes())?;
         std::fs::rename(&tmp, path)
     })();
@@ -151,6 +145,7 @@ mod tests {
         dir
     }
 
+    #[cfg(unix)]
     #[test]
     fn switching_writes_active_and_keeps_every_other_key_at_mode_600() {
         use std::os::unix::fs::PermissionsExt;

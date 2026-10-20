@@ -18,7 +18,6 @@ use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -504,13 +503,8 @@ fn write_rules(path: &Path, rules: &Validated, readonly: Option<bool>) -> std::i
     tmp.push(format!(".{}", std::process::id()));
     let tmp = PathBuf::from(tmp);
     let written = (|| {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        let mut f = crate::fsx::create_private(&tmp)?;
+        crate::fsx::restrict(&tmp)?;
         f.write_all(serde_json::to_string_pretty(&Value::Object(next))?.as_bytes())?;
         std::fs::rename(&tmp, path)
     })();

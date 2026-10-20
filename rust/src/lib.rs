@@ -8,6 +8,7 @@
 
 pub mod archive;
 pub mod decide;
+pub mod fsx;
 pub mod hook;
 pub mod jsc;
 pub mod judge;

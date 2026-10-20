@@ -16,7 +16,6 @@ use flate2::Compression;
 use rusqlite::{params, Connection};
 use std::collections::HashSet;
 use std::io::{Read, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 /// Runs the archive; returns the process exit code. Messages go to stdout/stderr exactly like the script.
@@ -157,10 +156,7 @@ fn archive(
         return Ok(0);
     }
 
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(out_dir)?;
+    crate::fsx::create_dir_private(out_dir)?;
     let stamp = &iso_from_ms(now_ms())[..10];
     let mut archive = out_dir.join(format!("decisions-{stamp}.db.gz"));
     let mut i = 2;
@@ -188,11 +184,7 @@ fn archive(
     // 2. Compress it and read it back.
     let raw = std::fs::read(tmp)?;
     let written = (|| -> Result<(), Fail> {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&archive)?;
+        let mut file = crate::fsx::create_new_private(&archive)?;
         let mut gz = GzEncoder::new(Vec::new(), Compression::default());
         gz.write_all(&raw)?;
         file.write_all(&gz.finish()?)?;
