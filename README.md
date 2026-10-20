@@ -86,7 +86,7 @@ artifact or a checksum mismatch stops the install; there is no fallback to anyth
 **Rebuild it.** Needs a Rust toolchain (`cargo`, `rustc`):
 
 ```bash
-skills/coding/decision-guard/rust/scripts/build-dist.sh   # release build for this machine, refreshes dist/ and SHA256SUMS
+rust/scripts/build-dist.sh   # release build for this machine, refreshes dist/ and SHA256SUMS
 ```
 
 Rebuild and commit `dist/` whenever the Rust source changes, or the installed binary will not match the code.
@@ -100,7 +100,7 @@ line in the `case` of `verify_binary` in `scripts/install.sh`.
 **Test it.**
 
 ```bash
-cd skills/coding/decision-guard/rust && cargo test   # offline; runs the real binary against fake servers and a private HOME
+cd rust && cargo test   # offline; runs the real binary against fake servers and a private HOME
 ```
 
 ## Install
@@ -122,13 +122,13 @@ Run from the repository root.
 1. **Preview.** Nothing is written:
 
    ```bash
-   skills/coding/decision-guard/scripts/install.sh --dry-run
+   scripts/install.sh --dry-run
    ```
 
 2. **Install everything this machine can use, with one command:**
 
    ```bash
-   skills/coding/decision-guard/scripts/install.sh
+   scripts/install.sh
    ```
 
    It checks `jq` (only when it must edit JSON) and the binary's checksum first, installs the binary and the adapters, links the skill into each agent's skills directory, wires a hook
@@ -138,12 +138,12 @@ Run from the repository root.
    updates the skill. To install only some parts, name the targets (cumulative):
 
    ```bash
-   skills/coding/decision-guard/scripts/install.sh files skill pi   # shared files + skill link + OMP/Pi extension
-   skills/coding/decision-guard/scripts/install.sh claude           # ~/.claude/settings.json
-   skills/coding/decision-guard/scripts/install.sh codex            # ~/.codex/hooks.json
-   skills/coding/decision-guard/scripts/install.sh copilot          # ~/.copilot/hooks/decision-guard.json
-   skills/coding/decision-guard/scripts/install.sh opencode         # OpenCode plugin
-   skills/coding/decision-guard/scripts/install.sh opencode-ask     # optional, see below
+   scripts/install.sh files skill pi   # shared files + skill link + OMP/Pi extension
+   scripts/install.sh claude           # ~/.claude/settings.json
+   scripts/install.sh codex            # ~/.codex/hooks.json
+   scripts/install.sh copilot          # ~/.copilot/hooks/decision-guard.json
+   scripts/install.sh opencode         # OpenCode plugin
+   scripts/install.sh opencode-ask     # optional, see below
    ```
 
    `opencode-ask` and `archive` are never part of the automatic set.
@@ -182,8 +182,8 @@ then prompts. Without it, OpenCode rejects commands that need approval.
 ### Verify
 
 ```bash
-(cd skills/coding/decision-guard/rust && cargo test)              # offline tests
-skills/coding/decision-guard/scripts/install.sh --dry-run claude  # expect "already wired"
+(cd rust && cargo test)              # offline tests
+scripts/install.sh --dry-run claude  # expect "already wired"
 ```
 
 In the agent, ask it to run `rm -rf some-test-dir`: you should get the approval prompt (or, in Codex and OpenCode
@@ -598,7 +598,7 @@ the log and edit the rules.
 ## Test
 
 ```bash
-cd skills/coding/decision-guard/rust && cargo test
+cd rust && cargo test
 ```
 
 Black-box tests run the real binary (hook, web viewer, archive, and `install.sh` on a copy of the skill tree) against a
