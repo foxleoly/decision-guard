@@ -1,0 +1,74 @@
+name: build
+
+# Tests on Linux, then builds the release binary for the three targets the project ships.
+# No extra system dependencies are needed: rusqlite is `bundled` (compiles its own SQLite) and
+# ureq uses rustls (no OpenSSL), so the stock stable toolchain on each runner is enough.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: cargo test (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test
+        run: cargo test --manifest-path rust/Cargo.toml
+
+  build:
+    name: build ${{ matrix.triple }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+          - os: ubuntu-latest
+            triple: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release --manifest-path rust/Cargo.toml
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dst
+          name="decision-guard-${{ matrix.triple }}"
+          cp rust/target/release/decision-guard "dst/$name"
+          chmod 755 "dst/$name"
+          cd dst && shasum -a 256 "$name" > "$name.sha256.txt"
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dst | Out-Null
+          $name = "decision-guard-${{ matrix.triple }}.exe"
+          Copy-Item "rust/target/release/decision-guard.exe" "dst/$name"
+          $hash = (Get-FileHash "dst/$name" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name" | Out-File -Encoding ascii "dst/$name.sha256.txt"
+
+      - name: Show checksum
+        shell: bash
+        run: cat dst/*.sha256.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: decision-guard-${{ matrix.triple }}
+          path: dst/*
+          if-no-files-found: error
