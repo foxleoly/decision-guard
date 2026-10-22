@@ -12,6 +12,7 @@ pub mod fsx;
 pub mod hook;
 pub mod jsc;
 pub mod judge;
+pub mod live;
 pub mod pyproof;
 pub mod readonly;
 pub mod rules;

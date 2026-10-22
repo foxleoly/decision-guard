@@ -172,7 +172,7 @@ fn a_disabled_stage_changes_nothing_else_in_the_log() {
 }
 
 #[test]
-fn every_earlier_stage_still_wins_over_the_proof() {
+fn deny_and_the_two_fixed_rules_still_win_over_the_proof() {
     let h = home();
     write_config(
         &h,
@@ -187,10 +187,10 @@ fn every_earlier_stage_still_wins_over_the_proof() {
         rows(&h, "rg -n secret src")[0].1.as_deref(),
         Some("user-deny")
     );
-    // allow list first: the same command is logged by the stage that came first
+    // the proof now runs before the allow list: a provable command is logged as readonly even when an allow
+    // pattern also matches, because the allow list only exists to save a model call
     hook(&h, "claude", &bash("git status"), &[]);
-    assert_eq!(rows(&h, "git status")[0].1.as_deref(), Some("allowlist"));
-    // dir-delete and exfiltration are not read-only to begin with, and a secret operand is left to the model
+    assert_eq!(rows(&h, "git status")[0].1.as_deref(), Some("readonly"));
     let ask = hook(
         &h,
         "claude",
@@ -256,7 +256,7 @@ fn check_reads_json_lines_so_a_multi_line_command_can_be_checked() {
 #[test]
 fn check_follows_the_saved_config_unless_told_not_to_and_honors_the_switch() {
     let h = home();
-    write_config(&h, &json!({"deny": ["ls -l*"], "allow": ["pwd"]}));
+    write_config(&h, &json!({"deny": ["ls -l*"], "allow": ["pwd", "make deploy"]}));
     let stage = |args: &[&str], env: &[(&str, &str)], c: &str| {
         check(&h, args, env, &format!("{c}\n"))
             .split('\t')
@@ -265,7 +265,7 @@ fn check_follows_the_saved_config_unless_told_not_to_and_honors_the_switch() {
             .to_string()
     };
     assert_eq!(stage(&[], &[], "ls -l"), "user-deny");
-    assert_eq!(stage(&[], &[], "pwd"), "user-allow");
+    assert_eq!(stage(&[], &[], "make deploy"), "user-allow");
     assert_eq!(stage(&["--no-config"], &[], "ls -l"), "read-only");
     assert_eq!(stage(&["--no-config"], &[], "pwd"), "read-only");
     assert_eq!(

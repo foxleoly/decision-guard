@@ -9,6 +9,7 @@
 //! outside a regex (glob matching, token splitting of `rm` operands) the code below says so.
 
 use crate::jsc::{homedir, is_space, js_string, normalize, utf16_len, WS};
+use crate::live::Live;
 use regex::Regex;
 use serde_json::Value;
 use std::sync::LazyLock;
@@ -180,16 +181,23 @@ pub struct Validated {
 /// The user's cleaned allow/deny globs.
 #[derive(Clone, Debug, Default)]
 pub struct Rules {
+    /// config.json's lists as the viewer shows and edits them. They are imported into `rules.db` once;
+    /// `precheck` never matches them directly, so a stale config entry cannot override the database.
     pub allow: Vec<String>,
     pub deny: Vec<String>,
-    /// Run the read-only proof ([`crate::readonly`]) after the user allow list. Off unless the caller turns it on
-    /// from config.json / DECISION_GUARD_READONLY, so the viewer's dry run stays as strict as it always was.
+    /// Run the read-only proof after the exfiltration rule. Off unless the caller turns it on from config.json /
+    /// DECISION_GUARD_READONLY, so the viewer's dry run stays as strict as it always was.
     pub readonly: bool,
+    /// What `precheck` actually matches: the enabled, unexpired rows of `rules.db`.
+    pub live: Live,
 }
 
 impl From<Validated> for Rules {
     fn from(v: Validated) -> Self {
+        // The in-memory copy of the lists keeps tests and a database-less run behaving like the config they were
+        // handed; at runtime `decide.rs` replaces `live` with the rows of `rules.db`.
         Rules {
+            live: Live::from_config(&v.allow, &v.deny),
             allow: v.allow,
             deny: v.deny,
             readonly: false,
@@ -340,9 +348,13 @@ impl Precheck {
     }
 }
 
-/// Single deterministic path shared by decide() and the web page's dry-run: built-in deny list -> user deny ->
-/// dir-delete -> exfiltration -> user allow -> read-only proof -> model. User deny is loose (the whole command or any simple command of a
-/// chain); user allow is strict (no chain/substitution/redirection characters, whole command must match).
+/// Single deterministic path shared by decide() and the web page's dry-run: built-in deny list -> live deny ->
+/// dir-delete -> exfiltration -> read-only proof -> live allow -> model.
+///
+/// The live lists come from `rules.db` ([`crate::live`]); config.json's allow/deny are imported into it once and
+/// then stop being read. Deny is loose (the whole command or any single command of a chain). Allow is strict —
+/// no chain, substitution or redirection — **and sits after the two rules that must ask every time**, so a
+/// learned or configured allow can save a model call but never a delete prompt.
 pub fn precheck(command: &str, cwd: &str, rules: &Rules) -> Precheck {
     if let Some(banned) = denied(command) {
         return Precheck {
@@ -351,20 +363,15 @@ pub fn precheck(command: &str, cwd: &str, rules: &Rules) -> Precheck {
         };
     }
 
-    let normalized = normalize(command);
     let chain: Vec<String> = command
         .split([';', '&', '|', '\n'])
         .map(normalize)
         .filter(|s| !s.is_empty())
         .collect();
-    if let Some(p) = rules
-        .deny
-        .iter()
-        .find(|p| glob_match(p, &normalized) || chain.iter().any(|part| glob_match(p, part)))
-    {
+    if let Some(entry) = rules.live.deny(command, &chain) {
         return Precheck {
-            pattern: Some(p.clone()),
-            reason: Some(format!("matches your deny pattern \"{p}\"")),
+            pattern: Some(entry.pattern.clone()),
+            reason: Some(format!("matches your deny pattern \"{}\"", entry.pattern)),
             ..Precheck::at(Stage::UserDeny, "user-deny", Action::Deny)
         };
     }
@@ -383,20 +390,20 @@ pub fn precheck(command: &str, cwd: &str, rules: &Rules) -> Precheck {
         return Precheck::at(Stage::Exfiltration, "exfiltration", Action::Ask);
     }
 
-    if !has_shell_meta(command) {
-        if let Some(p) = rules.allow.iter().find(|p| glob_match(p, &normalized)) {
-            return Precheck {
-                pattern: Some(p.clone()),
-                reason: Some(format!("matches your allow pattern \"{p}\"")),
-                ..Precheck::at(Stage::UserAllow, "allowlist", Action::Allow)
-            };
-        }
-    }
     if rules.readonly {
         if let Some(reason) = crate::readonly::prove(command, cwd) {
             return Precheck {
                 reason: Some(reason),
                 ..Precheck::at(Stage::ReadOnly, "readonly", Action::Allow)
+            };
+        }
+    }
+    if !has_shell_meta(command) {
+        if let Some(entry) = rules.live.allow(command) {
+            return Precheck {
+                pattern: Some(entry.pattern.clone()),
+                reason: Some(format!("matches your allow pattern \"{}\"", entry.pattern)),
+                ..Precheck::at(Stage::UserAllow, "allowlist", Action::Allow)
             };
         }
     }
@@ -546,9 +553,12 @@ mod tests {
     use serde_json::json;
 
     fn rules(allow: &[&str], deny: &[&str]) -> Rules {
+        let allow: Vec<String> = allow.iter().map(|s| s.to_string()).collect();
+        let deny: Vec<String> = deny.iter().map(|s| s.to_string()).collect();
         Rules {
-            allow: allow.iter().map(|s| s.to_string()).collect(),
-            deny: deny.iter().map(|s| s.to_string()).collect(),
+            live: Live::from_config(&allow, &deny),
+            allow,
+            deny,
             readonly: false,
         }
     }

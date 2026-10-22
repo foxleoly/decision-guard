@@ -715,9 +715,9 @@ fn api_check_is_stateless_and_never_calls_the_model_or_writes_anything() {
     let check = |body: Value| v.post("/api/check", &token, &body).json();
     assert_eq!(check(json!({"command": "rm -rf ~"}))["stage"], "dir-delete");
     assert_eq!(check(json!({"command": "rm -rf ~"}))["action"], "deny");
-    let allowed = check(json!({"command": "git status -s", "allow": ["git status*"]}));
+    let allowed = check(json!({"command": "make deploy", "allow": ["make deploy*"]}));
     assert_eq!(allowed["stage"], "user-allow");
-    assert_eq!(allowed["pattern"], "git status*");
+    assert_eq!(allowed["pattern"], "make deploy*");
     assert_eq!(allowed["rule"], "allowlist");
     assert_eq!(
         check(json!({"command": "ls", "readonly": false})),
