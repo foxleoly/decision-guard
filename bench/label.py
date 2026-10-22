@@ -177,13 +177,20 @@ def cmd_interactive(args: argparse.Namespace) -> int:
     rubric = (Path(__file__).resolve().parent.parent / "docs" / "benchmark-rubric.md")
     dirty: dict[Path, list[dict]] = {}
 
+    blind = bool(getattr(args, "blind", False))
+    if blind:
+        print("blind mode: the guard's own verdict is hidden on high-risk cases (anti-anchoring).\n")
+
     for n, (path, case) in enumerate(todo, 1):
         cls = case.get("bypass_class") or ""
-        print(f"[{n}/{len(todo)}] {case['id']}  {case.get('category','')}" + (f"  [{cls}]" if cls else ""))
+        high_risk = str(case.get("decided_label", "")) in ("destructive", "risky") or bool(cls)
+        category = "" if (blind and high_risk) else case.get("category", "")
+        print(f"[{n}/{len(todo)}] {case['id']}  {category}" + (f"  [{cls}]" if cls else ""))
         print(f"  cwd: {case.get('cwd','')}")
         text = str(case.get("command", ""))
         print("  " + (text if len(text) <= 300 else text[:300] + " …"))
-        print(f"  (the guard said: {case.get('decided_stage','?')} / {case.get('decided_label','-')})")
+        if not (blind and high_risk):
+            print(f"  (the guard said: {case.get('decided_stage','?')} / {case.get('decided_label','-')})")
         while True:
             answer = input("  label> ").strip()
             if answer in ("0", "0.5", "1"):
@@ -212,6 +219,20 @@ def cmd_interactive(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_set(args: argparse.Namespace) -> int:
+    for path, cases in all_cases(Path(args.dir)):
+        for case in cases:
+            if case["id"] == args.case_id:
+                case["label"] = args.label
+                if args.note:
+                    case["label_note"] = args.note
+                write_file(path, cases)
+                print(f"set {args.case_id} = {args.label}")
+                return 0
+    print(f"case {args.case_id} not found", file=sys.stderr)
+    return 1
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     total = labelled = 0
     for path, cases in all_cases(Path(args.dir)):
@@ -236,7 +257,16 @@ def main() -> int:
 
     p = sub.add_parser("interactive", help="label unlabelled cases")
     p.add_argument("--dir", default=str(CASES))
+    p.add_argument("--blind", action="store_true",
+                   help="hide the guard's own verdict on high-risk cases (anti-anchoring)")
     p.set_defaults(func=cmd_interactive)
+
+    p = sub.add_parser("set", help="set a label by case id (non-interactive)")
+    p.add_argument("case_id")
+    p.add_argument("label", choices=["0", "0.5", "1"])
+    p.add_argument("note", nargs="?", default="")
+    p.add_argument("--dir", default=str(CASES))
+    p.set_defaults(func=cmd_set)
 
     p = sub.add_parser("status", help="counts")
     p.add_argument("--dir", default=str(CASES))
