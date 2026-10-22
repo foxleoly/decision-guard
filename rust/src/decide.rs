@@ -1,6 +1,6 @@
 //! `decide`: the order of everything.
 //!
-//! built-in deny list -> your deny list -> recursive delete -> secret exfiltration -> your allow list -> read-only proof
+//! built-in deny list -> live deny -> recursive delete -> secret exfiltration -> read-only proof -> live allow
 //! -> cache -> model.
 //! The guard never force-approves: `Allow` means "no objection". An unjudged command (no service, API error, budget
 //! used up) is allowed with a warning, or denied when DECISION_GUARD_FAIL_CLOSED is set.
@@ -45,9 +45,10 @@ struct Logged {
     error: Option<String>,
 }
 
-/// The allow/deny lists from config.json, validated. A non-array list is a hard error in the JS too (it throws), and
-/// the hook turns it into a stderr message.
-fn rules_from_config(cfg: &Value) -> Result<Rules, String> {
+/// The allow/deny lists from config.json, validated, plus the live rows `precheck` matches. A non-array list is
+/// a hard error in the JS too (it throws), and the hook turns it into a stderr message. `import` copies the
+/// lists into `rules.db` on first use; the dry run passes false so it stays free of side effects.
+fn rules_from_config(cfg: &Value, import: bool) -> Result<Rules, String> {
     let list = |key: &str| -> Result<Vec<Value>, String> {
         match cfg.get(key) {
             None => Ok(Vec::new()),
@@ -58,7 +59,31 @@ fn rules_from_config(cfg: &Value) -> Result<Rules, String> {
     };
     let mut rules: Rules = validate_rules(&list("allow")?, &list("deny")?).into();
     rules.readonly = judge::readonly_enabled(&env, cfg);
+    rules.live = live_lists(&rules.allow, &rules.deny, import);
     Ok(rules)
+}
+
+/// The rows `precheck` matches: `rules.db`, with config.json's lists imported on first use. If the database
+/// cannot be opened, the in-memory copy from `From<Validated>` stays, so a broken file never silently drops the
+/// rules a user wrote.
+fn live_lists(allow: &[String], deny: &[String], import: bool) -> crate::live::Live {
+    let path = crate::live::path();
+    if !import {
+        // Dry run: read the database when it exists, never create it, and fall back to config.json otherwise.
+        return if path.exists() {
+            crate::live::Live::load_readonly(&path)
+        } else {
+            crate::live::Live::from_config(allow, deny)
+        };
+    }
+    match crate::live::open(&path) {
+        Ok(conn) => {
+            let _ = crate::live::import_config(&conn, allow, deny);
+            crate::live::Live::from_conn(&conn)
+                .unwrap_or_else(|_| crate::live::Live::from_config(allow, deny))
+        }
+        Err(_) => crate::live::Live::from_config(allow, deny),
+    }
 }
 
 fn plain(action: Action) -> Decision {
@@ -137,7 +162,7 @@ pub fn decide(command: &str, cwd: &str, agent: &str, ctx: &Context) -> Result<De
 
     // Deterministic: one shared path (precheck) decides the built-in deny list, your own deny/allow lists and the two
     // fixed rules, in that order; allow can never override any of the earlier stages.
-    let pre = precheck(command, cwd, &rules_from_config(&cfg)?);
+    let pre = precheck(command, cwd, &rules_from_config(&cfg, true)?);
     let rule = |name: &'static str| Logged {
         rule: Some(name),
         ..Logged::default()
@@ -329,7 +354,7 @@ pub fn check(input: &str, no_config: bool) -> String {
     let mut rules = if no_config {
         Rules::default()
     } else {
-        rules_from_config(&cfg).unwrap_or_default()
+        rules_from_config(&cfg, false).unwrap_or_default()
     };
     rules.readonly = judge::readonly_enabled(&env, &cfg);
     let json_lines = input.trim_start().starts_with('{');

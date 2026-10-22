@@ -133,6 +133,18 @@ impl Live {
         Live::from_conn(&conn).unwrap_or_default()
     }
 
+    /// Read-only open for the dry run: no schema creation, no WAL switch, and no file if it does not exist.
+    pub fn load_readonly(path: &Path) -> Live {
+        if !path.exists() {
+            return Live::default();
+        }
+        let Ok(conn) = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        else {
+            return Live::default();
+        };
+        Live::from_conn(&conn).unwrap_or_default()
+    }
+
     pub fn from_conn(conn: &Connection) -> rusqlite::Result<Live> {
         let mut statement = conn.prepare(
             "SELECT id, pattern, action, source, note, created_at, hit_count, last_hit_at, enabled,
