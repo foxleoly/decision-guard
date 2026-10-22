@@ -32,6 +32,17 @@ Local `decisions.db` (189 rows, this machine, biased because most were written w
 | `error` (timeout, unreachable) | 5 | 7318 |
 | `no_service` | 1 | 3 |
 
+**Latency budget — the number this roadmap is measured against.** Today, on this machine, **69% of decisions
+(131/189) reach the model** at 745 ms average, and the read-only proof covers **17% (33/189)**. The 49.4%
+above is a share *of the safe subset*, not of all commands; the two get confused easily and only the first one
+describes what a user feels. Targets, to be measured on the Phase 0 benchmark:
+
+| Target | Metric |
+|---|---|
+| **≥70%** of commands decided in **<10 ms** | rule layer + read-only + cache + live lists |
+| **≤20%** reach the model | and none of the labelled `destructive` set is among the ones allowed |
+| **<3 s** cumulative stall per 30-command session | at the P50 backend latency in force |
+
 ## Verdict on the proposed priorities
 
 | # | Proposal | Verdict | Why |
@@ -40,7 +51,7 @@ Local `decisions.db` (189 rows, this machine, biased because most were written w
 | P0-2 | Protocol matrix + fail-open/closed | **Agree, but it is half done and mis-scoped** | `rust/tests/hook.rs` already has 22 cases including the exact dcg#183 failure (model-judged ask on Codex becomes a warning). What is actually missing is not more cases but (a) a parameterised matrix pinned per agent, and (b) **visibility** of the fail-open path. |
 | P1-3 | Pack structure; import dcg's 50+ packs | **Split.** Pack structure: yes. Importing dcg content: **no, and this is not negotiable as written** | dcg is not MIT; it is "MIT with an OpenAI/Anthropic rider" that also lists *benchmarking, testing, analysing* as restricted "use" for those parties. Vendoring it re-licenses our whole repo. Details in "The dcg question". |
 | P1-4 | Hash-chained audit log | **Demote to P2, and only as an option** | It defends against log tampering, but the threat model here is honest mistakes (same as dcg's own README). Anyone who can rewrite `decisions.db` can also replace the binary. It buys compliance optics, not safety. |
-| P2-5 | Model backend abstraction: MLX / Ollama / LM Studio / OpenAI | **The premise is wrong — three of the four already work** | `judge.rs` speaks two wire formats and `config.json` now names services, so *any* SystemOne endpoint already works: Ollama ≥0.35, llama.cpp, SGLang, Jev, and our own `server.py`. Only **LM Studio** is missing, and it is missing because it has no `/v1/systemone` at all *(measured: `{"error":"Unexpected endpoint or method. (POST /v1/systemone)"}`)*. So this is one adapter, not an abstraction layer. |
+| P2-5 | Model backend abstraction: MLX / Ollama / LM Studio / OpenAI | **The premise is wrong — three of the four already work, and so does Linux** | `judge.rs` speaks two wire formats and `config.json` now names services, so *any* SystemOne endpoint already works: Ollama ≥0.35, llama.cpp, SGLang, Jev, and our own `server.py`. Only **LM Studio** is missing, because it has no `/v1/systemone` *(measured: `{"error":"Unexpected endpoint or method. (POST /v1/systemone)"}`)* — one adapter, not a layer. Linux needs no port either: `install.sh` is already POSIX (it picks the triple with `uname`, falls back from `sha256sum` to `shasum`, and uses `launchctl` only inside a Darwin branch, printing a cron line elsewhere); it has simply **never been run on a Linux host**, which is a verification task, not a rewrite. |
 | P2-6 | Approval UX: diff view + explain | **Reject as scoped** | The hook has no UI: `permissionDecisionReason` is plain text and the agent renders it. A diff view belongs in `decision-guard web`, which is a different surface with a different user. Explain-in-the-terminal would mean spending model calls on presentation. |
 
 ## What the list missed
@@ -162,6 +173,135 @@ Three rules for the matrix:
 3. **The adapter layer is tested separately** (`scripts/adapters/*.ts|js` under `node --test`), because the
    Rust tests cannot see what the wrapper does with `stdout.trim() === ""`.
 
+## SQLite live lists (added 2026-10-22)
+
+The list of what may run is data, not code: a `rules.db` the guard reads before anything else, that a person
+edits in the viewer, and that learns from what they approve. This section is a design, not yet code.
+
+### Separate database — decision
+
+**`~/.decision-guard/rules.db`, not new tables inside `decisions.db`.**
+
+| Reason | |
+|---|---|
+| Lifetime | `decisions` is a log that `decision-guard archive` moves out after 30 days; a learned allow entry that vanishes on day 31 is a silent regression |
+| Write contention | the log takes one INSERT per command, `hit_count` one UPDATE per hit — same file means two writers competing for the WAL write lock |
+| Sharing | a team hands over *just* the rules: one small file to copy. The log must never leave the machine |
+| Backup | rules are precious and tiny, logs are disposable and large |
+
+`config.json` keeps the service settings and thresholds. Its `allow`/`deny` arrays are **imported once into
+`rules.db` and then ignored** — still readable for one release, then removed.
+
+### Schema
+
+```sql
+CREATE TABLE rules (
+  id          INTEGER PRIMARY KEY,
+  pattern     TEXT NOT NULL,          -- glob; `*` is the only wildcard (same contract as rules.rs today)
+  action      TEXT NOT NULL,          -- allow | ask | deny
+  source      TEXT NOT NULL,          -- builtin | pack | gui | learned
+  note        TEXT,
+  created_at  TEXT NOT NULL,
+  hit_count   INTEGER NOT NULL DEFAULT 0,
+  last_hit_at TEXT,
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  expires_at  TEXT,                   -- NULL = permanent, ISO-8601 UTC
+  cwd         TEXT,                   -- for learned entries: where it was approved
+  UNIQUE (pattern, action, source, cwd)
+);
+CREATE INDEX rules_lookup ON rules (enabled, action);
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+```
+
+### Order in `precheck` — this changes a promise the README makes
+
+```
+1. built-in deny list (4 entries, in code)   never overridable          unchanged
+2. rules.db  action = deny                    new, before everything else
+3. directory delete                           never remembered          unchanged
+4. secret exfiltration                        never remembered          unchanged
+5. read-only proof                            unchanged
+6. rules.db  action = allow                   new, before the cache/model
+7. cache -> model
+```
+
+**Disagreement with the proposal as written.** You asked for "SQLite first: allow hit → allow". Taken
+literally, a learned or GUI allow entry would skip the directory-delete rule — and the README currently
+promises "approval is never remembered" for exactly those. One click on `rm -rf build` must not become a
+standing permission. So `allow` sits **after** stages 3–5: it saves the model call, never the delete prompt.
+Changing it is one line in `precheck`, but it retires a documented guarantee, so it needs an explicit yes.
+
+### Learning from approvals — the hook cannot see the answer
+
+This is the obstacle the proposal assumes away. `decision-guard` returns `ask` and **exits**; the agent shows
+its own dialog; the user clicks; the command runs. The guard process is gone and no agent's hook contract
+reports the outcome.
+
+The only workable signal is *the command actually ran*, which needs a second hook per agent:
+
+| Agent | "ran" signal | Wired today? |
+|---|---|---|
+| Claude Code | `PostToolUse`, matcher `Bash` | no — only `PreToolUse` + `UserPromptSubmit` |
+| Codex | `PostToolUse` in `hooks.json` | no |
+| Copilot CLI | `PostToolUse` | no |
+| OpenCode | plugin `tool.execute.after` | no — the plugin hooks `before` only |
+| Pi / OMP | extension `tool_result` | no |
+
+So "auto-learn on approve" is **five adapters, five install paths, five contract tests** — budget 4 days, and
+Codex is the awkward one: its `ask` is already downgraded to a warning, so the command runs either way and a
+`PostToolUse` there means only "the user did not veto it".
+
+Design consequences:
+
+- learn only after an `ask` that was actually executed; never from the guard's own `allow`;
+- learned `allow` entries get `expires_at = now + 7 days` by default (configurable; the viewer can make one
+  permanent), because "approved once" is not "approved forever";
+- a vetoed command produces no `PostToolUse`, so **denial cannot be learned the same way**; denial entries are
+  explicit (viewer) or inferred from the user's next message;
+- the cache keeps its own rule (short-lived, per command); the list is a deliberate, visible, expiring decision.
+
+### Normalisation — store the command, not a guess
+
+The proposal says "normalise into a pattern; the same directory's `rm -rf` is stored once". Automatic widening
+is where this turns dangerous: `rm -rf /tmp/a/b` → `rm -rf /tmp/a/*` is a **different permission**.
+
+**Decision: a learned entry is the exact command** (whitespace collapsed, the same normalisation the cache
+uses) **plus the `cwd`**, deduplicated by `UNIQUE (pattern, action, source, cwd)`. That is what makes "the same
+`rm -rf` in the same directory is stored once" true without inventing a wildcard. Widening is a manual action:
+the viewer shows the literal command with a "make this a prefix glob" button that previews the extra matches
+and requires confirmation; the result is `source=gui`, so the audit shows a human did it.
+
+### Cost on the hot path
+
+| Step | Budget (to be verified in Phase 2 acceptance) |
+|---|---|
+| open `rules.db` + one indexed SELECT | ≤1 ms P95 (WAL, `mmap_size`, statement built once per process) |
+| glob match in Rust over ≤2000 rows | <0.2 ms |
+| `hit_count` UPDATE (autocommit, one row) | ≤0.5 ms |
+
+The hook is a fresh process per call, so "once" means once per process. If the benchmark shows the UPDATE
+matters, the fallback is to record the hit in `decisions` (which already takes an INSERT) and fold counts
+during `archive` — then the hot path only reads.
+
+### Viewer and sharing
+
+`decision-guard web` grows a Rules page over `rules.db` (it already has one for `config.json`'s globs): list,
+search, filter by `source`/`action`, add, disable, delete, with `hit_count` and `last_hit_at` shown.
+`decision-guard rules export|import` moves JSON between machines; on conflict **deny wins**, and imported rows
+are marked `source=gui` so provenance stays visible.
+
+### Why this strengthens the pitch
+
+dcg is a static pack: excellent until your workflow differs, and silent when it does. The live list adds the
+two things a static pack cannot — **the rules this person actually needs become learned and visible**, and **a
+team hands over its accumulated decisions as one file**. With probabilistic judging the story becomes: packs
+for the known-bad, a calibrated model for the unknown, and an auditable list for what your workflow repeats.
+
+Keep it honest, though: **the live list is a convenience and an audit surface, not a security boundary.** It
+learns from what a human approved once, and GuardFall still shows that pattern layers are bypassable. It must
+not be sold as "the guard now knows your intent".
+
 ## Phased plan
 
 Estimates are one experienced person with agent assistance; "d" = focused days.
@@ -198,7 +338,25 @@ labelled set is committed (commands masked) so the number is reproducible by som
 **Acceptance:** breaking one agent's fixture makes exactly one matrix case fail; a forced timeout is visible
 in the viewer summary and filterable; `fail_closed` per agent is covered by a test that asserts a deny.
 
-### Phase 2 — Rule layer as packs (3 weeks)
+### Phase 2 — Live lists (4 weeks) · new, and the highest user-visible value
+
+| Task | Commit | d | Depends |
+|---|---|---|---|
+| `rules.db`: schema, WAL, one-time import of `config.json`'s `allow`/`deny` | `rust/src/live.rs` | 2 | — |
+| `precheck` order change + hit recording + `expires_at` expiry | `rust/src/rules.rs`, `decide.rs` | 2 | schema |
+| `decision-guard rules list|add|remove|enable|export|import` | `rust/src/rules_cmd.rs`, `main.rs` | 2 | schema |
+| Viewer Rules page over `rules.db` (list, search, add, disable, hit counts, glob preview) | `web.rs` | 3 | schema |
+| `PostToolUse` (or `tool.execute.after` / `tool_result`) per agent | `hook.rs`, `scripts/adapters/*`, `scripts/install.sh` | 4 | order change |
+| Learning: exact-command upsert, 7-day default expiry, **no automatic wildcard** | `live.rs` | 2 | PostToolUse |
+| Hot-path latency test (P95 open + select + update) | `rust/tests/live_perf.rs` | 1 | all |
+| Benchmark slice with and without lists | `bench/run.py --with-lists` | 1.5 | Phase 0 |
+
+**Acceptance:** on the benchmark's repeat-heavy slice the model-call rate falls materially **and no labelled
+`destructive` case becomes allowed**; a learned entry expires on schedule; the Rules page shows hit counts; one
+`rules export` round-trips onto a second machine; hot-path P95 stays ≤1.5 ms; the 97 existing tests pass with
+`config.json`'s lists migrated.
+
+### Phase 3 — Rule layer as packs (3 weeks)
 
 | Task | Commit | d | Depends |
 |---|---|---|---|
@@ -211,7 +369,7 @@ in the viewer summary and filterable; `fail_closed` per agent is covered by a te
 **Acceptance:** model-call rate on the benchmark drops from ~59% to ≤35% with **no loss of destructive recall**;
 each pack can be disabled individually and the drop is measured; the existing 97 tests still pass unchanged.
 
-### Phase 3 — Audit integrity and approval surface (1.5 weeks)
+### Phase 4 — Audit integrity and approval surface (1.5 weeks)
 
 | Task | Commit | d | Depends |
 |---|---|---|---|
@@ -223,7 +381,7 @@ each pack can be disabled individually and the drop is measured; the existing 97
 **Acceptance:** a hand-edited row is reported by `verify-chain`; the viewer shows every stage that was skipped
 and why, for a real command.
 
-### Phase 4 — Backends, cascade, fallback (2.5 weeks)
+### Phase 5 — Backends, cascade, fallback (2.5 weeks)
 
 | Task | Commit | d | Depends |
 |---|---|---|---|
@@ -238,14 +396,19 @@ and why, for a real command.
 mean latency is under 150 ms at equal recall to `pplx-decider` alone; killing the active service falls back
 instead of failing open, proven by a test.
 
-**Total: ~12 weeks** (Phase 0–1 are the critical path; Phases 2 and 4 can overlap once the benchmark exists).
+**Total: ~16 weeks** (Phase 0–1 are the critical path; Phase 2 is the highest user-visible value and can start
+once Phase 0's corpus exists; Phases 3 and 5 can overlap).
 
 ## Risks and open questions
 
-**R1 — dcg's license is a blocker, not a detail.** The rider forbids use by OpenAI/Anthropic and their agents
-and names benchmarking as "use". Vendoring its packs or corpus would attach that to every user of this
-project. *Position: structure only, no content.* If you disagree, get a written answer from the author first.
-
+**R1 — dcg's license is a settled blocker, not an open question.** Its `LICENSE` is "MIT with an
+OpenAI/Anthropic rider": no rights at all for those parties or anyone acting on their behalf, and "use"
+explicitly covers *benchmarking, testing, analysing, incorporating into any evaluation harness*. The conflict is
+not hypothetical — **this project already ships an OpenAI backend** (`OPENAI_ENDPOINT`, `gpt-6-luna`), so
+vendored dcg material would be fed to OpenAI's Decisions API on a user's machine, which is precisely "making it
+available to a Restricted Party". Even without that backend a vendored copy would attach the rider to every
+downstream user. **Decision: methodology only** (pack-by-domain, TOML corpus schema, cross-pack replay); every
+rule and every labelled case is written here. Not reopened without written permission from the author.
 **R2 — The benchmark's ground truth is the schedule risk.** 600 labels is 6–7 hours of one person, and the
 `risky`/`destructive` line is genuinely fuzzy. If labelling stalls, the whole roadmap stalls, because Phase 2's
 acceptance criterion depends on it. Mitigation: start labelling in week 1, in parallel with the tooling.
@@ -276,7 +439,13 @@ otherwise we are grading the model with the model.
 
 ## Open questions for the user
 
-1. Is vendoring dcg content acceptable to you at all, given R1? (My recommendation: no.)
-2. Do you want the cascade (Phase 4) to be the default once calibrated, or an opt-in?
-3. Windows: PowerShell installer, or drop the artifact and publish darwin+linux only?
-4. Is 600 labelled cases the right size, or do you want the first pass at 200 to prove the tooling?
+1. **The live list changes a documented promise.** A learned allow must not skip the directory-delete rule (my
+   position, and the order drawn in "SQLite live lists"). Confirm that order, or say explicitly that
+   "approval is never remembered" is retired for deletes.
+2. Should learned entries expire by default (7 days), or stay until reviewed? Expiry is safer and still makes
+   repeats fast; permanent entries turn the list into a long-lived permission store.
+3. Do you want the cascade (Phase 5) to be the default once calibrated, or an opt-in?
+4. Windows: PowerShell installer, or drop the artifact and publish darwin+linux only?
+5. Is 600 labelled cases the right size, or do you want the first pass at 200 to prove the tooling?
+6. PostToolUse for five agents is 4 days of work and a new class of hook bugs. Is auto-learning worth that, or
+   should v1 of the live list be manual (viewer + `rules add`) with learning later?
