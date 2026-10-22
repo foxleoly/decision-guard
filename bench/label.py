@@ -18,6 +18,14 @@ import sqlite3
 import sys
 from pathlib import Path
 
+# Commands that exist only because the deny list and the delete rule were being tested. They stay in the
+# corpus (deleting evidence is worse than flagging it) but are marked so a report can separate them from
+# real workflow.
+PROBE = re.compile(
+    r"\bmkfs\b|\bnewfs\b|diskutil\s+(erase|secureErase|partitionDisk|reformat|zeroDisk)"
+    r"|\bdd\s+if=.*of=/dev/|:\s*\(\s*\)\s*\{|\brm -rf (\"?~\"?|\"?/\"?)(\s|$)"
+    r"|\bprune -a|\brm -rf /tmp/dg-"
+)
 CASES = Path(__file__).resolve().parent / "cases"
 SCHEMA = 1
 
@@ -86,7 +94,6 @@ def read_file(path: Path) -> list[dict]:
 def all_files(directory: Path) -> list[Path]:
     return sorted(p for p in directory.glob("*.toml"))
 
-
 def all_cases(directory: Path) -> list[tuple[Path, list[dict]]]:
     return [(p, read_file(p)) for p in all_files(directory)]
 
@@ -123,7 +130,7 @@ def cmd_export(args: argparse.Namespace) -> int:
                 "input_kind": "command",
                 "command": sanitize(text),
                 "cwd": cwd or "",
-                "source": "log",
+                "source": "probe" if PROBE.search(text) else "log",
                 "bypass_class": "",
                 "decided_stage": f"{source}:{rule}" if rule else source,
                 "decided_label": choice or "",
