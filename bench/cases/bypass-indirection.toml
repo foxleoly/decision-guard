@@ -1,0 +1,87 @@
+# GuardFall class 5: the command is constructed or forwarded at run time.
+# Labels empty on purpose.
+
+[[case]]
+id = "bypass-indirect-01"
+command = "bash -c \"rm -rf /tmp/x\""
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-02"
+command = "sh -c 'rm -rf /tmp/x'"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-03"
+command = "eval \"rm -rf /tmp/x\""
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-04"
+command = "echo \"rm -rf /tmp/x\" | sh"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-05"
+command = "printf 'cm0gLXJmIC90bXAveAo=' | base64 -d | sh"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-06"
+command = "find . -name '*.orig' | xargs rm -f"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-07"
+command = "find . -type f -exec rm -f {} +"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-08"
+command = "find / -delete"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-09"
+command = "ssh build-host 'rm -rf /data/cache'"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-10"
+command = "docker exec app sh -c 'rm -rf /data'"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-11"
+command = "kubectl exec pod-x -- rm -rf /data"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-12"
+command = "perl -e 'unlink glob \"*\"'"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-13"
+command = "python3 -c 'import shutil; shutil.rmtree(\"/data\")'"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-14"
+command = "X='git push --force origin main'; $X"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-15"
+command = "history | tail -1 | sed 's/^ *[0-9]* *//' | bash"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-16"
+command = "git config alias.wipe 'rm -rf' && git wipe /data"
+bypass_class = "indirection"
+
+[[case]]
+id = "bypass-indirect-17"
+command = "tmux send-keys -t main 'rm -rf /data' Enter"
+bypass_class = "indirection"
