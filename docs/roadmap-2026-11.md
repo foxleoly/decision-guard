@@ -338,7 +338,7 @@ labelled set is committed (commands masked) so the number is reproducible by som
 **Acceptance:** breaking one agent's fixture makes exactly one matrix case fail; a forced timeout is visible
 in the viewer summary and filterable; `fail_closed` per agent is covered by a test that asserts a deny.
 
-### Phase 2 — Live lists (4 weeks) · new, and the highest user-visible value
+### Phase 2 — Live lists (3 weeks) · new, and the highest user-visible value
 
 | Task | Commit | d | Depends |
 |---|---|---|---|
@@ -346,15 +346,17 @@ in the viewer summary and filterable; `fail_closed` per agent is covered by a te
 | `precheck` order change + hit recording + `expires_at` expiry | `rust/src/rules.rs`, `decide.rs` | 2 | schema |
 | `decision-guard rules list|add|remove|enable|export|import` | `rust/src/rules_cmd.rs`, `main.rs` | 2 | schema |
 | Viewer Rules page over `rules.db` (list, search, add, disable, hit counts, glob preview) | `web.rs` | 3 | schema |
-| `PostToolUse` (or `tool.execute.after` / `tool_result`) per agent | `hook.rs`, `scripts/adapters/*`, `scripts/install.sh` | 4 | order change |
-| Learning: exact-command upsert, 7-day default expiry, **no automatic wildcard** | `live.rs` | 2 | PostToolUse |
 | Hot-path latency test (P95 open + select + update) | `rust/tests/live_perf.rs` | 1 | all |
 | Benchmark slice with and without lists | `bench/run.py --with-lists` | 1.5 | Phase 0 |
 
+**v1 scope (decision 2026-10-22).** Manual only: entries are created through the viewer and `rules add`.
+`PostToolUse` collection and automatic learning (6 d) move to v1.1 — the hook never sees the outcome of its own
+`ask`, so that work is five adapters, not a flag on an existing callback.
+
 **Acceptance:** on the benchmark's repeat-heavy slice the model-call rate falls materially **and no labelled
-`destructive` case becomes allowed**; a learned entry expires on schedule; the Rules page shows hit counts; one
-`rules export` round-trips onto a second machine; hot-path P95 stays ≤1.5 ms; the 97 existing tests pass with
-`config.json`'s lists migrated.
+`destructive` case becomes allowed**; a manual entry with `expires_at` disappears on schedule; the Rules page
+shows hit counts; one `rules export` round-trips onto a second machine; hot-path P95 stays ≤1.5 ms; the 97
+existing tests pass with `config.json`'s lists migrated.
 
 ### Phase 3 — Rule layer as packs (3 weeks)
 
@@ -390,13 +392,14 @@ and why, for a real command.
 | Per-model calibration table from Phase 0, so probabilities are comparable | `judge.rs`, `docs/` | 2 | Phase 0 |
 | Cascade: small model, escalate the `0.3–0.7` band to the configured large one | `judge.rs` | 3 | calibration, fallback |
 | Backend comparison in the benchmark | `bench/run.py --by-backend` | 2 | adapter |
-| PowerShell installer **or** explicit build-only note | `scripts/install.ps1` / `dist/README.md` | 2 | — |
+| PowerShell installer (decision 2026-10-22) | `scripts/install.ps1` | 2 | CI artifact |
+| Linux round-trip: `install.sh` + hook on a real Linux host (never run there) | `docs/` note | 1 | CI artifact |
 
 **Acceptance:** the same 600-case set runs against all four backends and reports (accuracy, P95); the cascade's
 mean latency is under 150 ms at equal recall to `pplx-decider` alone; killing the active service falls back
 instead of failing open, proven by a test.
 
-**Total: ~16 weeks** (Phase 0–1 are the critical path; Phase 2 is the highest user-visible value and can start
+**Total: ~15 weeks** (Phase 0–1 are the critical path; Phase 2 is the highest user-visible value and can start
 once Phase 0's corpus exists; Phases 3 and 5 can overlap).
 
 ## Risks and open questions
@@ -409,13 +412,14 @@ vendored dcg material would be fed to OpenAI's Decisions API on a user's machine
 available to a Restricted Party". Even without that backend a vendored copy would attach the rider to every
 downstream user. **Decision: methodology only** (pack-by-domain, TOML corpus schema, cross-pack replay); every
 rule and every labelled case is written here. Not reopened without written permission from the author.
-**R2 — The benchmark's ground truth is the schedule risk.** 600 labels is 6–7 hours of one person, and the
-`risky`/`destructive` line is genuinely fuzzy. If labelling stalls, the whole roadmap stalls, because Phase 2's
-acceptance criterion depends on it. Mitigation: start labelling in week 1, in parallel with the tooling.
+**R2 — The benchmark's ground truth is the schedule risk.** 200 labels is ~2 hours of one person, 600 is 6–7
+hours, and the `risky`/`destructive` line is genuinely fuzzy. If labelling stalls, Phase 2 and Phase 3 both
+stall, because their acceptance criteria depend on it. Mitigation: 200 first (decision 5), labelled in week 1
+alongside the tooling.
 
-**R3 — 1 s per model call is too slow for real sessions.** At the current 59% model-call rate a 30-command
-session stalls 17.7 s. Two ways out: cut the rate (Phase 2) or cut the per-call cost (cascade / `laya`). The
-cascade needs per-model calibration, which is why it sits in Phase 4 and not Phase 1.
+**R3 — 1 s per model call is too slow for real sessions.** At the current 59–69% model-call rate a 30-command
+session stalls 17.7 s. Three ways out: cut the rate (Phase 2 live lists, Phase 3 packs) or cut the per-call cost
+(cascade / `laya`). The cascade needs per-model calibration, which is why it sits in Phase 5 and not Phase 1.
 
 **R4 — The read-only fast path is pattern-based and we have never attacked it.** Its proof is a tool/flag
 table; a construction it misreads becomes a silent allow. This is the same class of weakness GuardFall found
@@ -425,7 +429,7 @@ should be read as "proven against the patterns we know".
 **R5 — Pack-ification may not pay.** `readonly.rs` (1490 lines) and `pyproof.rs` (1572) are the thick part of
 the rule layer, not the 4-entry deny list. Turning 4 entries into packs is easy and buys little; the gain only
 arrives if the new packs (git, containers, cloud) actually catch what the model currently decides. Phase 0's
-false-negative list decides whether Phase 2 is worth 3 weeks — so the plan is written to be cut after Phase 0
+false-negative list decides whether Phase 3 is worth 3 weeks — so the plan is written to be cut after Phase 0
 if the list is thin.
 
 **R6 — Windows remains half-supported.** The CI produces a `.exe`, `install.sh` is bash, and no hook path here
@@ -437,15 +441,18 @@ must default to off, be per-agent, and be documented with the latency consequenc
 **R8 — Model-based labelling would make the benchmark circular.** Any generated corpus needs a human pass;
 otherwise we are grading the model with the model.
 
-## Open questions for the user
+## Decisions (resolved 2026-10-22)
 
-1. **The live list changes a documented promise.** A learned allow must not skip the directory-delete rule (my
-   position, and the order drawn in "SQLite live lists"). Confirm that order, or say explicitly that
-   "approval is never remembered" is retired for deletes.
-2. Should learned entries expire by default (7 days), or stay until reviewed? Expiry is safer and still makes
-   repeats fast; permanent entries turn the list into a long-lived permission store.
-3. Do you want the cascade (Phase 5) to be the default once calibrated, or an opt-in?
-4. Windows: PowerShell installer, or drop the artifact and publish darwin+linux only?
-5. Is 600 labelled cases the right size, or do you want the first pass at 200 to prove the tooling?
-6. PostToolUse for five agents is 4 days of work and a new class of hook bugs. Is auto-learning worth that, or
-   should v1 of the live list be manual (viewer + `rules add`) with learning later?
+All six questions from the previous draft are answered; the plan above already reflects them.
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Does a learned allow skip the directory-delete rule? | **No.** It sits after the delete and exfiltration rules; "approval is never remembered" keeps holding for deletes. |
+| 2 | Expiry of learned entries | **7 days by default**, and the viewer can promote an entry to permanent. |
+| 3 | Cascade default | **Opt-in** until the benchmark shows equal recall at a better P50; only then may it become the default. |
+| 4 | Windows | **Write the PowerShell installer** and keep the three-platform CI artifacts. |
+| 5 | Corpus size | **200 labelled cases first** to prove the tooling end to end; expand to 600 afterwards. |
+| 6 | Live-list v1 scope | **Manual only** (viewer + `rules add`); `PostToolUse` collection and automatic learning move to v1.1. |
+
+Consequences folded into the plan: Phase 2 drops to 3 weeks, Phase 5 gains a one-day Linux round-trip, and the
+Phase 0 acceptance is written against 200 cases rather than 600.
