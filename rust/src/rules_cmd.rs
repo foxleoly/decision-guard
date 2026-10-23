@@ -5,10 +5,10 @@
 //! someone's deny into an allow.
 
 use crate::jsc::{iso_from_ms, now_ms, opt};
-use crate::live::{self, Action, Entry};
+use crate::live::{self, Entry};
+use crate::rules::Action;
 use serde_json::Value;
-use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::io::Read;
 
 pub fn main(args: &[String]) -> i32 {
     match run(args) {
@@ -28,9 +28,9 @@ fn run(args: &[String]) -> Result<(), String> {
     match command {
         "list" => list(&conn, rest),
         "add" => add(&conn, rest),
-        "remove" => by_id(&conn, rest, |id| live::remove(&conn, id)),
-        "enable" => by_id(&conn, rest, |id| live::set_enabled(&conn, id, true)),
-        "disable" => by_id(&conn, rest, |id| live::set_enabled(&conn, id, false)),
+        "remove" => by_id(rest, |id| live::remove(&conn, id)),
+        "enable" => by_id(rest, |id| live::set_enabled(&conn, id, true)),
+        "disable" => by_id(rest, |id| live::set_enabled(&conn, id, false)),
         "export" => export(&conn, rest),
         "import" => import(&conn, rest),
         other => Err(format!(
@@ -54,7 +54,10 @@ fn list(conn: &rusqlite::Connection, args: &[String]) -> Result<(), String> {
         println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
         return Ok(());
     }
-    println!("{:>4}  {:<5}  {:<8}  {:>5}  {:<20}  {:<24}  pattern", "id", "act", "source", "hits", "last hit", "expires");
+    println!(
+        "{:>4}  {:<5}  {:<8}  {:>5}  {:<20}  {:<24}  pattern",
+        "id", "act", "source", "hits", "last hit", "expires"
+    );
     for entry in entries {
         if source.is_some_and(|s| entry.source != s) || action.is_some_and(|a| entry.action.as_str() != a) {
             continue;
@@ -93,7 +96,7 @@ fn add(conn: &rusqlite::Connection, args: &[String]) -> Result<(), String> {
     let expires = match opt(args, "--days")? {
         Some(days) => {
             let days: f64 = days.parse().map_err(|_| format!("--days must be a number, not {days}"))?;
-            Some(iso_from_ms(now_ms() + days * 86_400_000.0))
+            Some(iso_from_ms(now_ms() + (days * 86_400_000.0) as i64))
         }
         None => None,
     };
@@ -104,11 +107,7 @@ fn add(conn: &rusqlite::Connection, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn by_id(
-    conn: &rusqlite::Connection,
-    args: &[String],
-    change: impl Fn(i64) -> rusqlite::Result<bool>,
-) -> Result<(), String> {
+fn by_id(args: &[String], change: impl Fn(i64) -> rusqlite::Result<bool>) -> Result<(), String> {
     let id: i64 = args
         .iter()
         .find(|a| !a.starts_with("--"))

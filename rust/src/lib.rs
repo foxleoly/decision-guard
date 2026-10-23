@@ -16,6 +16,7 @@ pub mod live;
 pub mod pyproof;
 pub mod readonly;
 pub mod rules;
+pub mod rules_cmd;
 pub mod service;
 pub mod store;
 pub mod web;

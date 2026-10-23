@@ -29,6 +29,7 @@ fn main() -> ExitCode {
         Some("web") => ExitCode::from(decision_guard::web::main(&args[1..]) as u8),
         Some("archive") => ExitCode::from(decision_guard::archive::main(&args[1..]) as u8),
         Some("service") => ExitCode::from(decision_guard::service::main(&args[1..]) as u8),
+        Some("rules") => ExitCode::from(decision_guard::rules_cmd::main(&args[1..]) as u8),
         Some("check") => {
             let mut text = String::new();
             let _ = std::io::stdin().read_to_string(&mut text);
@@ -38,7 +39,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         _ => {
-            eprintln!("usage: decision-guard hook <claude|codex|copilot|opencode|pi>   (payload JSON on stdin)\n       decision-guard web [--port N] [--db PATH] [--config PATH]\n       decision-guard archive [--keep-days N] [--dry-run] [--db PATH] [--out DIR]\n       decision-guard check [--no-config]   (one command per line, or JSON lines, on stdin)\n       decision-guard service [<name>] [--config PATH]   (list the configured services, or switch the active one)");
+            eprintln!("usage: decision-guard hook <claude|codex|copilot|opencode|pi>   (payload JSON on stdin)\n       decision-guard web [--port N] [--db PATH] [--config PATH]\n       decision-guard archive [--keep-days N] [--dry-run] [--db PATH] [--out DIR]\n       decision-guard check [--no-config]   (one command per line, or JSON lines, on stdin)\n       decision-guard service [<name>] [--config PATH]   (list the configured services, or switch the active one)\n       decision-guard rules list|add|remove|enable|disable|export|import   (the live allow/deny lists)");
             ExitCode::from(2)
         }
     }
