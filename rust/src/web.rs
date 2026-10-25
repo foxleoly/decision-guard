@@ -19,11 +19,10 @@ use std::collections::HashSet;
 use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use subtle::ConstantTimeEq;
-
+use crate::web_live;
 const PAGE: &str = include_str!("web-page.html");
 const COLUMNS: [&str; 18] = [
     "id",
@@ -309,10 +308,27 @@ fn route(v: &Viewer, req: &Request, body: &mut impl Read) -> Response {
                     }),
                 )
             }
+            "/api/live" => {
+                let q = params.iter().find(|(k, _)| k == "q").map(|(_, v)| v.as_str());
+                match web_live::open(&crate::live::path()) {
+                    Ok(c) => json_reply(200, &web_live::get(&c, q)),
+                    Err(e) => {
+                        let msg = format!("rules.db: {e}");
+                        reply(500, "text/plain", &msg)
+                    }
+                }
+            }
+            "/api/live/preview" => {
+                let p = params.iter().find(|(k, _)| k == "pattern").map(|(_, v)| v.as_str()).unwrap_or("");
+                json_reply(200, &web_live::preview(p))
+            }
             _ => text(404, "not found"),
         },
         "POST" if path == "/api/rules" || path == "/api/check" => {
             post(v, req, path == "/api/rules", body)
+        }
+        "POST" if path == "/api/live/add" || path == "/api/live/toggle" => {
+            post_live(v, req, path == "/api/live/add", body)
         }
         _ => text(405, "method not allowed"),
     }
@@ -419,6 +435,65 @@ fn post(v: &Viewer, req: &Request, save: bool, body: &mut impl Read) -> Response
         out.insert("reason".into(), s.into());
     }
     json_reply(200, &Value::Object(out))
+}
+
+/// A POST to `/api/live/add` or `/api/live/toggle`: read-only the db, then one insert or one update.
+/// The guard's `x-dg-token` and origin checks are the same as the rules POST, so a page from another
+/// origin cannot write to `rules.db`.
+fn post_live(v: &Viewer, req: &Request, add: bool, body: &mut impl Read) -> Response {
+    let content_type = req.header("content-type").unwrap_or("");
+    if content_type.split(';').next().unwrap_or("").trim() != "application/json" {
+        return text(400, "content-type must be application/json");
+    }
+    let presented = req
+        .header("x-dg-token")
+        .filter(|_| req.count("x-dg-token") == 1);
+    if !presented.is_some_and(|p| bool::from(p.as_bytes().ct_eq(v.token.as_bytes()))) {
+        return text(403, "forbidden");
+    }
+    let host = req.header("host").unwrap_or("");
+    if req
+        .header("origin")
+        .is_some_and(|o| o.strip_prefix("http://") != Some(host))
+    {
+        return text(403, "forbidden");
+    }
+    if req.header("transfer-encoding").is_some() {
+        return text(400, "chunked bodies are not supported");
+    }
+    let len = req
+        .header("content-length")
+        .map_or(Ok(0), |s| s.parse::<usize>());
+    let Ok(len) = len else {
+        return text(400, "bad content-length");
+    };
+    if len > BODY_MAX {
+        return text(413, "body too large");
+    }
+    let mut raw = vec![0u8; len];
+    if body.read_exact(&mut raw).is_err() {
+        return text(400, "incomplete body");
+    }
+    let conn = match web_live::open(&crate::live::path()) {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("rules.db: {e}");
+            return reply(500, "text/plain", &msg);
+        }
+    };
+    let parsed: Value = match serde_json::from_slice(&raw) {
+        Ok(v) => v,
+        Err(_) => return text(400, "bad json"),
+    };
+    let result = if add {
+        web_live::add(&conn, &parsed)
+    } else {
+        web_live::toggle(&conn, &parsed)
+    };
+    match result {
+        Ok(v) => json_reply(200, &v),
+        Err((code, v)) => json_reply(code, &v),
+    }
 }
 
 fn rule_errors(errors: &[Value]) -> Response {

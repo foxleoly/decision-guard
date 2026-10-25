@@ -20,3 +20,4 @@ pub mod rules_cmd;
 pub mod service;
 pub mod store;
 pub mod web;
+pub mod web_live;
