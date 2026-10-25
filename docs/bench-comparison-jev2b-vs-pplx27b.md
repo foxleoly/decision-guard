@@ -7,8 +7,8 @@ both services: `api` 179 cases (70%), `rule` 75 cases (30%).
 ## Latency
 
 | stage  | service    | P50 ms | P95 ms | max ms |
-|--------|------------|--------|--------|--------|
-| all    | jev2b      | 44     | 94     | 540    |
+| all    | pplx-27b   | 1251   | 2196   | 7267   |
+| rule   | pplx-27b   | 1      | 5.138  | 8      |
 | all    | pplx-27b   | 1251   | 2245   | 7267   |
 | api    | jev2b      | 46     | 111    | 540    |
 | api    | pplx-27b   | 1412   | 2245   | 7267   |
