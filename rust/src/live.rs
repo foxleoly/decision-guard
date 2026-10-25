@@ -422,4 +422,24 @@ mod tests {
         assert!(entry.last_hit_at.is_some());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
+
+    #[test]
+    fn a_matching_allow_hit_increments_hit_count_and_sets_last_hit_at() {
+        let path = temp("hit-through-precheck");
+        let conn = open(&path).unwrap();
+        let id = add(&conn, "cargo test*", Action::Allow, None, None, None).unwrap();
+        assert_eq!(all(&conn).unwrap()[0].hit_count, 0);
+        assert!(all(&conn).unwrap()[0].last_hit_at.is_none());
+
+        // The real path: load the live rows, match a command, bump the matched entry.
+        let live = Live::from_conn(&conn).unwrap();
+        let entry = live.allow("cargo test --release").expect("the allow pattern should match");
+        assert_eq!(entry.id, id);
+        bump(&conn, entry.id).unwrap();
+
+        let after = all(&conn).unwrap();
+        assert_eq!(after[0].hit_count, 1);
+        assert!(after[0].last_hit_at.is_some());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
 }

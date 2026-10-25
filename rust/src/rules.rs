@@ -334,6 +334,8 @@ pub struct Precheck {
     pub action: Option<Action>,
     pub pattern: Option<String>,
     pub reason: Option<String>,
+    /// The id of the live-list entry that matched, when `pattern` was set by `live.deny` or `live.allow`.
+    pub live_hit_id: Option<i64>,
 }
 
 impl Precheck {
@@ -344,6 +346,7 @@ impl Precheck {
             action: Some(action),
             pattern: None,
             reason: None,
+            live_hit_id: None,
         }
     }
 }
@@ -371,6 +374,7 @@ pub fn precheck(command: &str, cwd: &str, rules: &Rules) -> Precheck {
     if let Some(entry) = rules.live.deny(command, &chain) {
         return Precheck {
             pattern: Some(entry.pattern.clone()),
+            live_hit_id: Some(entry.id),
             reason: Some(format!("matches your deny pattern \"{}\"", entry.pattern)),
             ..Precheck::at(Stage::UserDeny, "user-deny", Action::Deny)
         };
@@ -402,6 +406,7 @@ pub fn precheck(command: &str, cwd: &str, rules: &Rules) -> Precheck {
         if let Some(entry) = rules.live.allow(command) {
             return Precheck {
                 pattern: Some(entry.pattern.clone()),
+                live_hit_id: Some(entry.id),
                 reason: Some(format!("matches your allow pattern \"{}\"", entry.pattern)),
                 ..Precheck::at(Stage::UserAllow, "allowlist", Action::Allow)
             };
@@ -413,6 +418,7 @@ pub fn precheck(command: &str, cwd: &str, rules: &Rules) -> Precheck {
         action: None,
         pattern: None,
         reason: None,
+        live_hit_id: None,
     }
 }
 

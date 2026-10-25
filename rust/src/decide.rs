@@ -96,6 +96,16 @@ fn plain(action: Action) -> Decision {
     }
 }
 
+/// Record a hit on a live-list row: open the database, bump `hit_count`/`last_hit_at`, drop the
+/// connection. A broken or missing `rules.db` must never block the verdict, so every failure is
+/// swallowed silently.
+fn record_live_hit(id: Option<i64>) {
+    let Some(id) = id else { return };
+    if let Ok(conn) = crate::live::open(&crate::live::path()) {
+        let _ = crate::live::bump(&conn, id);
+    }
+}
+
 /// `agent`: which tool is asking. Err only for what the JS lets throw (a cache file that cannot be written).
 pub fn decide(command: &str, cwd: &str, agent: &str, ctx: &Context) -> Result<Decision, String> {
     if crate::jsc::trim(command).is_empty() {
@@ -186,6 +196,7 @@ pub fn decide(command: &str, cwd: &str, agent: &str, ctx: &Context) -> Result<De
             ));
         }
         Stage::UserDeny => {
+            record_live_hit(pre.live_hit_id);
             let reason = format!("decision-guard: refusing this command, it {}; edit your deny list on the web viewer if this is wrong.", pre.reason.as_deref().unwrap_or(""));
             return Ok(finish(
                 Decision {
@@ -241,6 +252,7 @@ pub fn decide(command: &str, cwd: &str, agent: &str, ctx: &Context) -> Result<De
             return Ok(finish(result, "rule", rule("exfiltration"), &calls));
         }
         Stage::UserAllow => {
+            record_live_hit(pre.live_hit_id);
             return Ok(finish(
                 plain(Action::Allow),
                 "rule",
