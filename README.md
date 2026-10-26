@@ -610,3 +610,21 @@ With `CARGO_TARGET_DIR` set outside the repository, nothing is written into the 
 
 Not a security boundary: models misjudge, and agents have write paths this does not see. See `SKILL.md` for the full list.
 Keep deterministic permission rules for commands that must never run.
+
+## Threat model & out of scope
+
+decision-guard defends against **an agent accidentally running a destructive command** — a `rm -rf` typed by a
+model, a script that clobbers the wrong directory, an unreviewed `git push`. It is an LLM decider plus an
+approval gate plus an audit log plus live allow/deny lists: the model judges, the gate asks before anything
+irreversible, and every decision is recorded.
+
+It is **not** a defence against:
+
+- **prompt injection** — a malicious web page, repo or file that steers the model into issuing commands;
+- **supply-chain poisoning** — a trojaned package, binary or model checkpoint;
+- **a malicious agent impersonating** a trusted one, or forging session identity;
+- **the user bypassing the guard** — you can disable it, set `approvalMode: yolo`, or write an `allow` entry that
+  skips the gate. The guard only stops what it is asked to judge.
+
+The read-only fast path and the deterministic deny list narrow, not eliminate, the model's input surface.
+See `docs/roadmap-2026-11.md` for the full list of what is intentionally out of scope and why.
