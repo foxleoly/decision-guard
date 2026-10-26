@@ -1,5 +1,4 @@
 import os
-import json
 import uvicorn
 from fastapi import FastAPI, Request
 from service import Jev2bService
