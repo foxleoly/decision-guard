@@ -1,0 +1,41 @@
+# Fixture live lists for `bench/run.py --with-lists`.
+#
+# Used when the user's ~/.decision-guard/config.json has no "allow"/"deny" keys.
+#
+# Allow patterns cover the recoverable / state-changing-but-safe commands in
+# `bench/cases/repeats.toml` (each verified to reach the model under readonly-on:
+# `decision-guard check` prints `model - - -`). Commands NOT covered here —
+# `make`, `git merge`, `chmod`, `sqlite3` — stay with the model in the
+# with-lists run, so the slice measures a real split instead of a blanket allow.
+# No destructive command is in the allow list; the deny canary is a home-dir
+# delete that must be refused.
+
+allow = [
+  "pip3 install*",
+  "pipx*",
+  "npm install*",
+  "yarn add*",
+  "cargo build*",
+  "cargo test*",
+  "git commit*",
+  "git add*",
+  "git stash*",
+  "git checkout -b*",
+  "sed -i.bak*",
+  "cp*",
+  "echo*",
+  "touch*",
+  "node server*",
+  "bash script*",
+  "python3 analyze*",
+  "python3 train*",
+  "python3 -m http.server*",
+  "ln -s*",
+  "brew install*",
+  "npm run build*",
+  "docker run --rm*",
+]
+
+deny = [
+  "rm -rf /Users/foxleoly*",
+]

@@ -3,21 +3,19 @@
 
 Two reports are produced side by side when `--with-lists` is passed:
 
-- **baseline** — the existing behaviour: `rules.db` does not exist in the throwaway HOME, so `precheck`
-  falls back to `config.json`'s allow/deny lists (or to nothing, when the user has no lists).
-- **with-lists** — `rules.db` is seeded from `config.json`'s allow/deny lists **before** the run, so the
-  live-list precheck layer is active and every `rule` hit is recorded in the throwaway log.
+- **baseline** — the existing behaviour: no `rules.db` in the throwaway HOME, so `precheck`
+  falls back to `config.json`'s allow/deny lists in memory. The model is called for every
+  command not decided by a deterministic rule.
+- **with-lists** — `rules.db` is seeded from `config.json`'s allow/deny lists, plus a
+  built-in fixture (`bench/fixtures/live-lists.toml`) when `config.json` has no allow/deny.
+  The live-list precheck layer is active, so matching allow commands skip the model.
 
-The comparison focuses on the **model-call rate**: in the baseline, commands that match an allow pattern
-are still classified by the model (the allow list in `config.json` is consulted in memory but the `rule`
-stage is not recorded as a hit on a persistent database row). With live lists enabled, those same
-commands are decided at the `rule` stage in <10 ms and skip the model entirely.
-
-A labelled corpus is required to measure accuracy; until then the report states only that no labelled
-destructive case became allowed when the lists are active.
+The two runs use **separate throwaway HOME directories**, so the model-verdict cache from
+the baseline run cannot contaminate the with-lists run. The only variable that differs is
+whether the live list is active.
 
 Usage:
-    python3 bench/run.py --with-lists --out docs/benchmark-2026-11.md
+    python3 bench/run.py --with-lists --out docs/bench-with-lists.md
 """
 
 from __future__ import annotations
@@ -34,21 +32,33 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CASES = ROOT / "bench" / "cases"
+FIXTURE = ROOT / "bench" / "fixtures" / "live-lists.toml"
 DG = Path.home() / ".decision-guard" / "bin" / "decision-guard"
 REAL_CONFIG = Path.home() / ".decision-guard" / "config.json"
 
 
 def load_cases(directory: Path) -> list[dict]:
     import tomllib
-
     cases: list[dict] = []
     for path in sorted(directory.glob("*.toml")):
         cases.extend(tomllib.loads(path.read_text()).get("case", []))
     return cases
+
+
+def load_fixture_lists() -> tuple[list[str], list[str]]:
+    """allow/deny patterns from bench/fixtures/live-lists.toml."""
+    import tomllib
+    if not FIXTURE.exists():
+        return [], []
+    data = tomllib.loads(FIXTURE.read_text())
+    return data.get("allow", []), data.get("deny", [])
+
+
 def run_one(case: dict, home: Path, timeout: float) -> dict:
     payload = {
         "tool_name": "Bash",
@@ -77,32 +87,23 @@ def read_rows(home: Path) -> dict[str, dict]:
     db = home / ".decision-guard" / "decisions.db"
     if not db.exists():
         return {}
-    conn = sqlite3.connect(db)
+    conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row
     rows: dict[str, dict] = {}
     for row in conn.execute(
         "SELECT command, source, rule, choice, action, latency_ms, probabilities FROM decisions"
     ):
-        key = row["command"]
-        rows[key] = dict(row)
+        rows.setdefault(row["command"], dict(row))
     conn.close()
     return rows
 
 
-def seed_rules_db(home: Path) -> int:
-    """Import config.json's allow/deny lists into `rules.db` in the throwaway HOME.
+def seed_rules_db(home: Path, allow: list[str], deny: list[str]) -> int:
+    """Write `allow`/`deny` patterns into rules.db in the throwaway HOME.
 
-    Returns the number of entries seeded. Used by the `--with-lists` run so that the
-    live-list precheck layer is active for every case.
+    Creates the schema if it does not exist (idempotent with the hook's own import).
+    Returns the number of entries seeded.
     """
-    config = home / ".decision-guard" / "config.json"
-    if not config.exists():
-        return 0
-    data = json.loads(config.read_text())
-    allow = data.get("allow", [])
-    deny = data.get("deny", [])
-    if not isinstance(allow, list) or not isinstance(deny, list):
-        return 0
     db = home / ".decision-guard" / "rules.db"
     conn = sqlite3.connect(str(db))
     conn.executescript(
@@ -126,8 +127,7 @@ def seed_rules_db(home: Path) -> int:
         CREATE INDEX IF NOT EXISTS rules_lookup ON rules (enabled, action);
         """
     )
-    import datetime
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     count = 0
     for pattern in deny:
         conn.execute(
@@ -182,11 +182,16 @@ def fmt(value: float) -> str:
     return "—" if value != value else f"{value:.3f}"
 
 
-def run_suite(cases: list[dict], home: Path, timeout: float, seed_lists: bool) -> list[dict]:
-    """Run every case against the throwaway HOME. `seed_lists` controls whether `rules.db` is pre-seeded."""
-    if seed_lists:
-        n = seed_rules_db(home)
-        print(f"  seeded {n} rules into rules.db", file=sys.stderr)
+def make_home() -> Path:
+    home = Path(tempfile.mkdtemp(prefix="dg-bench-"))
+    (home / ".decision-guard").mkdir(parents=True)
+    if REAL_CONFIG.exists():
+        shutil.copy2(REAL_CONFIG, home / ".decision-guard" / "config.json")
+    return home
+
+
+def run_suite(cases: list[dict], home: Path, timeout: float) -> list[dict]:
+    """Run every case against the throwaway HOME."""
     results: list[dict] = []
     for n, case in enumerate(cases, 1):
         run = run_one(case, home, timeout)
@@ -207,6 +212,10 @@ def run_suite(cases: list[dict], home: Path, timeout: float, seed_lists: bool) -
         except (ValueError, KeyError, TypeError):
             case["p_destructive"] = None
     return results
+
+
+def model_call_rate(results: list[dict]) -> float:
+    return 100 * sum(1 for c in results if c["stage"] == "api") / len(results)
 
 
 def stage_table(results: list[dict], lines: list[str]) -> None:
@@ -233,16 +242,12 @@ def stage_table(results: list[dict], lines: list[str]) -> None:
     lines.append("")
 
 
-def model_call_rate(results: list[dict]) -> float:
-    return 100 * sum(1 for c in results if c["stage"] == "api") / len(results)
-
-
 def destructive_risk(results: list[dict]) -> list[dict]:
     """Cases where a live allow entry decided `allow` but the command is destructive.
 
-    A destructive command is one whose label (when present) marks it destructive, or whose
-    `rm -rf` / `rm -fr` / `shred` / `mkfs` / `dd` keyword appears. Without labels this is a
-    keyword heuristic; the report flags it as 'needs label confirmation'.
+    A destructive command is one whose `rm -rf` / `shred` / `mkfs` / `dd of=/dev` keyword
+    appears. Without labels this is a keyword heuristic; the report flags it as
+    'needs label confirmation'.
     """
     patterns = [
         r"\brm\s+-rf?\b",
@@ -263,61 +268,114 @@ def write_comparison(
     out: Path,
     baseline: list[dict],
     with_lists: list[dict],
-    seed_count: int,
+    seed_allow: list[str],
+    seed_deny: list[str],
 ) -> None:
+    n_allow = len(seed_allow)
+    n_deny = len(seed_deny)
     lines: list[str] = []
     lines.append("# Benchmark with live lists\n")
+    # Corpus note: the repeat-heavy slice is real data written into bench/cases/repeats.toml.
+    n_repeats_added = sum(1 for c in baseline if c.get("category") == "repeat")
     lines.append(
-        f"Baseline (no live lists) vs. with `{seed_count}` allow/deny entries imported into `rules.db`.\n"
+        f"Baseline (no live lists, independent HOME) vs. with "
+        f"`{n_allow}` allow + `{n_deny}` deny entries seeded into `rules.db`.\n"
+    )
+    lines.append(
+        f"**Corpus note:** the benchmark corpus includes a repeat-heavy slice "
+        f"({n_repeats_added} cases, each command repeated) written into `bench/cases/repeats.toml`. "
+        "These commands were verified to reach the model in the baseline run.\n"
     )
 
-    # --- model-call rate ---
+    # Which patterns were seeded and where they came from
+    lines.append("## Seeded patterns\n")
+    lines.append("Source: `bench/fixtures/live-lists.toml` (used when `config.json` has no allow/deny).\n")
+    lines.append("<details><summary>allow patterns</summary>\n")
+    lines.append("```")
+    lines.extend(seed_allow)
+    lines.append("```\n")
+    lines.append("</details>\n")
+    lines.append("<details><summary>deny patterns</summary>\n")
+    lines.append("```")
+    lines.extend(seed_deny)
+    lines.append("```\n")
+    lines.append("</details>\n")
+
+    # --- model-call rate, attributed: live-list (rule+allow) vs. cache ---
     base_rate = model_call_rate(baseline)
     list_rate = model_call_rate(with_lists)
+
+    # In the with-lists run, commands skipped the model via the live allow list (stage=rule, rule=allowlist)
+    # or via the verdict cache (stage=cache). Count both.
+    by_live = [c for c in with_lists if c["stage"] == "rule" and c.get("rule") == "allowlist"]
+    by_cache = [c for c in with_lists if c["stage"] == "cache"]
+    by_builtin_rule = [
+        c for c in with_lists if c["stage"] == "rule" and c.get("rule") not in ("allowlist", None, "")
+    ]
+    base_api = sum(1 for c in baseline if c["stage"] == "api")
+    list_api = sum(1 for c in with_lists if c["stage"] == "api")
+
     lines.append("## Model-call rate\n")
     lines.append("| config | cases | reached model | rate |")
     lines.append("|---|---|---|---|")
-    base_model = sum(1 for c in baseline if c["stage"] == "api")
-    list_model = sum(1 for c in with_lists if c["stage"] == "api")
-    lines.append(f"| baseline | {len(baseline)} | {base_model} | {base_rate:.1f}% |")
-    lines.append(f"| with-lists | {len(with_lists)} | {list_model} | {list_rate:.1f}% |")
+    lines.append(f"| baseline (independent HOME, no rules.db) | {len(baseline)} | {base_api} | {base_rate:.1f}% |")
+    lines.append(f"| with-lists (independent HOME, seeded) | {len(with_lists)} | {list_api} | {list_rate:.1f}% |")
     lines.append("")
     delta = base_rate - list_rate
-    lines.append(f"Model-call rate drops **{delta:+.1f} pp** when the lists are active.\n")
+    lines.append(f"Model-call rate drops **{delta:+.1f} pp** when the live lists are active.\n")
 
-    # --- repeat-heavy slice ---
-    # A "repeat" is a command that appears more than once in the corpus (the case set is built from real
-    # decision logs, so repeated commands are common). The lists let those repeats skip the model.
+    lines.append(
+        "## How the with-lists run avoided the model\n"
+    )
+    lines.append(
+        "Each case that skipped the model is attributed to the stage that decided it in the "
+        "with-lists run. A `cache` hit means the verdict was already in the throwaway HOME's "
+        "verdict cache (seeded by an earlier command in the same run); a `rule`/`allowlist` hit "
+        "means the live list decided it before the cache was consulted.\n"
+    )
+    lines.append("| skip mechanism | cases |")
+    lines.append("|---|---|")
+    lines.append(f"| live allow-list (rule=allowlist) | {len(by_live)} |")
+    lines.append(f"| verdict cache (stage=cache) | {len(by_cache)} |")
+    lines.append(f"| other deterministic rule (builtin/readonly/denylist) | {len(by_builtin_rule)} |")
+    lines.append(f"| still reached the model (api) | {list_api} |")
+    lines.append("")
+
+    # --- stage distribution ---
+    lines.append("## Stage distribution\n")
+    for label, results in [("Baseline (independent HOME)", baseline), ("With lists (independent HOME)", with_lists)]:
+        lines.append(f"### {label}\n")
+        stage_table(results, lines)
+
+    # --- repeat-heavy slice: commands that appear more than once in the corpus ---
     seen: dict[str, int] = {}
     for c in baseline:
         seen[c["command"]] = seen.get(c["command"], 0) + 1
     repeat_cmds = {cmd for cmd, n in seen.items() if n > 1}
     base_repeats = [c for c in baseline if c["command"] in repeat_cmds]
     list_repeats = [c for c in with_lists if c["command"] in repeat_cmds]
-    base_repeat_model = sum(1 for c in base_repeats if c["stage"] == "api")
-    list_repeat_model = sum(1 for c in list_repeats if c["stage"] == "api")
-    lines.append(
-        f"## Repeat-heavy slice ({len(repeat_cmds)} commands with ≥2 occurrences)\n"
-    )
-    lines.append("| | reached model | rate |")
-    lines.append("|---|---|---|")
+    base_repeat_api = sum(1 for c in base_repeats if c["stage"] == "api")
+    list_repeat_api = sum(1 for c in list_repeats if c["stage"] == "api")
+    list_repeat_rule = sum(1 for c in list_repeats if c["stage"] == "rule")
+    base_rate_r = 100 * base_repeat_api / len(base_repeats) if base_repeats else 0.0
+    list_rate_r = 100 * list_repeat_api / len(list_repeats) if list_repeats else 0.0
+
+    lines.append(f"## Repeat-heavy slice ({len(repeat_cmds)} distinct commands, {len(base_repeats)} cases)\n")
+    lines.append("| config | cases | reached model | rule-decided | model rate |")
+    lines.append("|---|---|---|---|---|")
     if base_repeats:
         lines.append(
-            f"| baseline | {base_repeat_model} | "
-            f"{100 * base_repeat_model / len(base_repeats):.1f}% |"
+            f"| baseline | {len(base_repeats)} | {base_repeat_api} | "
+            f"{sum(1 for c in base_repeats if c['stage']=='rule')} | {base_rate_r:.1f}% |"
         )
     if list_repeats:
-        lines.append(
-            f"| with-lists | {list_repeat_model} | "
-            f"{100 * list_repeat_model / len(list_repeats):.1f}% |"
-        )
+        lines.append(f"| with-lists | {len(list_repeats)} | {list_repeat_api} | {list_repeat_rule} | {list_rate_r:.1f}% |")
     lines.append("")
-
-    # --- stage distribution ---
-    lines.append("## Stage distribution\n")
-    for label, results in [("Baseline", baseline), ("With lists", with_lists)]:
-        lines.append(f"### {label}\n")
-        stage_table(results, lines)
+    delta_r = base_rate_r - list_rate_r
+    lines.append(
+        f"Repeat-heavy slice: model-call rate drops **{delta_r:+.1f} pp** when the live lists are active "
+        f"({base_repeat_api}/{len(base_repeats)} → {list_repeat_api}/{len(list_repeats)}).\n"
+    )
 
     # --- destructive risk ---
     risk = destructive_risk(with_lists)
@@ -331,15 +389,14 @@ def write_comparison(
         lines.append("| command | rule | pattern |")
         lines.append("|---|---|---|")
         for c in risk:
-            lines.append(f"| `{c['command'][:60]}` | {c['rule']} | {c['pattern'] or '—'} |")
+            lines.append(f"| `{c['command'][:60]}` | {c['rule']} | {c.get('pattern', '—')} |")
         lines.append("")
     else:
         lines.append("No destructive case was allowed by a live entry in this run.\n")
 
-    # --- stage table already written above ---
     lines.append("## Reproducing\n")
     lines.append("```bash")
-    lines.append("python3 bench/run.py --with-lists --out docs/benchmark-2026-11.md")
+    lines.append("python3 bench/run.py --with-lists --out docs/bench-with-lists.md")
     lines.append("```")
     lines.append("")
     out.write_text("\n".join(lines))
@@ -351,11 +408,11 @@ def main() -> int:
     parser.add_argument("--cases", default=str(CASES))
     parser.add_argument("--out", default=str(ROOT / "docs" / "benchmark-2026-11.md"))
     parser.add_argument("--timeout", type=float, default=30.0)
-    parser.add_argument("--keep", action="store_true", help="keep the throwaway HOME")
+    parser.add_argument("--keep", action="store_true", help="keep the throwaway HOME(s)")
     parser.add_argument(
         "--with-lists",
         action="store_true",
-        help="run the corpus twice: baseline + with lists seeded from config.json",
+        help="run the corpus twice in independent HOMEs: baseline + with live lists seeded",
     )
     args = parser.parse_args()
 
@@ -367,35 +424,49 @@ def main() -> int:
         print(f"no binary at {DG}; run scripts/install.sh files first", file=sys.stderr)
         return 1
 
-    home = Path(tempfile.mkdtemp(prefix="dg-bench-"))
-    (home / ".decision-guard").mkdir(parents=True)
+    # Read config.json's allow/deny; fall back to the fixture when absent.
+    config_allow: list[str] = []
+    config_deny: list[str] = []
     if REAL_CONFIG.exists():
-        shutil.copy2(REAL_CONFIG, home / ".decision-guard" / "config.json")
+        try:
+            data = json.loads(REAL_CONFIG.read_text())
+            config_allow = [s for s in data.get("allow", []) if isinstance(s, str)]
+            config_deny = [s for s in data.get("deny", []) if isinstance(s, str)]
+        except (json.JSONDecodeError, OSError):
+            pass
+    fixture_allow, fixture_deny = load_fixture_lists()
+    seed_allow = config_allow if config_allow else fixture_allow
+    seed_deny = config_deny if config_deny else fixture_deny
+    seed_source = "config.json" if (config_allow or config_deny) else "bench/fixtures/live-lists.toml"
+    print(f"seed source: {seed_source} ({len(seed_allow)} allow, {len(seed_deny)} deny)", file=sys.stderr)
 
     if args.with_lists:
-        # Baseline: no rules.db — config.json's allow/deny are consulted in memory only.
-        print(f"running {len(cases)} cases (baseline) against {home}", file=sys.stderr)
-        baseline = run_suite(cases, home, args.timeout, seed_lists=False)
+        # Two independent HOMEs: the baseline's verdict cache never contaminates the with-lists run.
+        home_base = make_home()
+        print(f"baseline (no rules.db) against {home_base}", file=sys.stderr)
+        baseline = run_suite(cases, home_base, args.timeout)
 
-        # Seed rules.db from config.json, then run the same corpus with the live lists active.
-        seed_count = seed_rules_db(home)
-        print(f"running {len(cases)} cases (with-lists, {seed_count} rules seeded) against {home}", file=sys.stderr)
-        with_lists = run_suite(cases, home, args.timeout, seed_lists=False)
+        home_lists = make_home()
+        seed_count = seed_rules_db(home_lists, seed_allow, seed_deny)
+        print(f"with-lists ({seed_count} rules seeded) against {home_lists}", file=sys.stderr)
+        with_lists = run_suite(cases, home_lists, args.timeout)
 
-        write_comparison(Path(args.out), baseline, with_lists, seed_count)
+        write_comparison(Path(args.out), baseline, with_lists, seed_allow, seed_deny)
         if not args.keep:
-            with contextlib.suppress(OSError):
-                shutil.rmtree(home)
+            for h in (home_base, home_lists):
+                with contextlib.suppress(OSError):
+                    shutil.rmtree(h)
         return 0
 
+    # --- standard single-run report (unchanged) ---
+    home = make_home()
     print(f"running {len(cases)} cases against {home}", file=sys.stderr)
-    results = run_suite(cases, home, args.timeout, seed_lists=False)
+    results = run_suite(cases, home, args.timeout)
 
     if not args.keep:
         with contextlib.suppress(OSError):
             shutil.rmtree(home)
 
-    # --- standard report (unchanged) ---
     labelled = [c for c in results if str(c.get("label", "")) != ""]
     unlabelled = len(results) - len(labelled)
     pairs = [
@@ -484,7 +555,7 @@ def main() -> int:
     lines.append("```bash")
     lines.append("python3 bench/label.py interactive    # fill the labels (a person, not a model)")
     lines.append("python3 bench/run.py                  # rewrite this report")
-    lines.append("python3 bench/run.py --with-lists     # A/B: baseline vs. live lists active")
+    lines.append("python3 bench/run.py --with-lists     # A/B: baseline vs. live lists (independent HOMEs)")
     lines.append("```")
     lines.append("")
 

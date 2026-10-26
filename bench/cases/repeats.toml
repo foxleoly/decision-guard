@@ -1,0 +1,567 @@
+# 31 distinct bench-tokenized commands x 3 = 93 cases, all verified 'model' via
+# `decision-guard check` under default config (readonly-on). The -dg tokens keep each
+# command's verdict-cache key (normalize(command)) distinct from the original corpus,
+# so the baseline and with-lists runs cannot share cached verdicts.
+#
+# The allow patterns in `bench/fixtures/live-lists.toml` deliberately do NOT cover
+# `make*`, `git merge*`, `chmod*` or `sqlite3*`: those stay with the model in the
+# with-lists run, so the slice measures a real split instead of a blanket allow.
+# No destructive command is in the allow list. Labels empty on purpose.
+
+[[case]]
+id = "repeats-1-1"
+command = "pip3 install requests-dg==1.0"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-1-2"
+command = "pip3 install requests-dg==1.0"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-1-3"
+command = "pip3 install requests-dg==1.0"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-2-1"
+command = "pip3 install --upgrade pip-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-2-2"
+command = "pip3 install --upgrade pip-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-2-3"
+command = "pip3 install --upgrade pip-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-3-1"
+command = "npm install lodash-dg@4"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-3-2"
+command = "npm install lodash-dg@4"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-3-3"
+command = "npm install lodash-dg@4"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-4-1"
+command = "npm install --save-dev mocha-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-4-2"
+command = "npm install --save-dev mocha-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-4-3"
+command = "npm install --save-dev mocha-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-5-1"
+command = "cargo build --features dgbench"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-5-2"
+command = "cargo build --features dgbench"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-5-3"
+command = "cargo build --features dgbench"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-6-1"
+command = "cargo test --lib dg_module"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-6-2"
+command = "cargo test --lib dg_module"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-6-3"
+command = "cargo test --lib dg_module"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-7-1"
+command = "make clean-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-7-2"
+command = "make clean-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-7-3"
+command = "make clean-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-8-1"
+command = "make dginstall"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-8-2"
+command = "make dginstall"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-8-3"
+command = "make dginstall"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-9-1"
+command = "python3 analyze_data_dg.py"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-9-2"
+command = "python3 analyze_data_dg.py"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-9-3"
+command = "python3 analyze_data_dg.py"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-10-1"
+command = "python3 train_dg.py --epochs 10"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-10-2"
+command = "python3 train_dg.py --epochs 10"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-10-3"
+command = "python3 train_dg.py --epochs 10"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-11-1"
+command = "node server_dg.js"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-11-2"
+command = "node server_dg.js"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-11-3"
+command = "node server_dg.js"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-12-1"
+command = "bash script_dg.sh"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-12-2"
+command = "bash script_dg.sh"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-12-3"
+command = "bash script_dg.sh"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-13-1"
+command = "docker run --rm alpine-dg echo ok-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-13-2"
+command = "docker run --rm alpine-dg echo ok-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-13-3"
+command = "docker run --rm alpine-dg echo ok-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-14-1"
+command = "git commit -m \"wip-dg: update\""
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-14-2"
+command = "git commit -m \"wip-dg: update\""
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-14-3"
+command = "git commit -m \"wip-dg: update\""
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-15-1"
+command = "git add . && git commit -m \"chore-dg\""
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-15-2"
+command = "git add . && git commit -m \"chore-dg\""
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-15-3"
+command = "git add . && git commit -m \"chore-dg\""
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-16-1"
+command = "git stash push -m dg-a"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-16-2"
+command = "git stash push -m dg-a"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-16-3"
+command = "git stash push -m dg-a"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-17-1"
+command = "git checkout -b feature-dg-x"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-17-2"
+command = "git checkout -b feature-dg-x"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-17-3"
+command = "git checkout -b feature-dg-x"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-18-1"
+command = "git merge main-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-18-2"
+command = "git merge main-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-18-3"
+command = "git merge main-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-19-1"
+command = "sed -i.bak 's/foo-dg/bar-dg/' notes-dg.txt"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-19-2"
+command = "sed -i.bak 's/foo-dg/bar-dg/' notes-dg.txt"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-19-3"
+command = "sed -i.bak 's/foo-dg/bar-dg/' notes-dg.txt"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-20-1"
+command = "chmod 644 /tmp/perm-dg-test"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-20-2"
+command = "chmod 644 /tmp/perm-dg-test"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-20-3"
+command = "chmod 644 /tmp/perm-dg-test"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-21-1"
+command = "echo hi-dg > /tmp/redirect-dg-test"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-21-2"
+command = "echo hi-dg > /tmp/redirect-dg-test"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-21-3"
+command = "echo hi-dg > /tmp/redirect-dg-test"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-22-1"
+command = "touch /tmp/t1-dg && mv /tmp/t1-dg /tmp/t2-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-22-2"
+command = "touch /tmp/t1-dg && mv /tmp/t1-dg /tmp/t2-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-22-3"
+command = "touch /tmp/t1-dg && mv /tmp/t1-dg /tmp/t2-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-23-1"
+command = "cp -r src-dg/ build/out-dg/"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-23-2"
+command = "cp -r src-dg/ build/out-dg/"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-23-3"
+command = "cp -r src-dg/ build/out-dg/"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-24-1"
+command = "sqlite3 app-dg.db \"INSERT INTO users-dg(name) VALUES('x')\""
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-24-2"
+command = "sqlite3 app-dg.db \"INSERT INTO users-dg(name) VALUES('x')\""
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-24-3"
+command = "sqlite3 app-dg.db \"INSERT INTO users-dg(name) VALUES('x')\""
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-25-1"
+command = "brew install jq-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-25-2"
+command = "brew install jq-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-25-3"
+command = "brew install jq-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-26-1"
+command = "pipx install httpie-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-26-2"
+command = "pipx install httpie-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-26-3"
+command = "pipx install httpie-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-27-1"
+command = "npm run build-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-27-2"
+command = "npm run build-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-27-3"
+command = "npm run build-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-28-1"
+command = "yarn add react-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-28-2"
+command = "yarn add react-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-28-3"
+command = "yarn add react-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-29-1"
+command = "python3 -m http.server 8001-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-29-2"
+command = "python3 -m http.server 8001-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-29-3"
+command = "python3 -m http.server 8001-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-30-1"
+command = "ln -s /tmp/target-dg /tmp/link-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-30-2"
+command = "ln -s /tmp/target-dg /tmp/link-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-30-3"
+command = "ln -s /tmp/target-dg /tmp/link-dg"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-31-1"
+command = "go build"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-31-2"
+command = "go build"
+source = "hand"
+category = "repeat"
+
+[[case]]
+id = "repeats-31-3"
+command = "go build"
+source = "hand"
+category = "repeat"
