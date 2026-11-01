@@ -114,7 +114,8 @@ the system libraries, and SQLite is built in, so there is no runtime to install)
 Why a binary: every command an agent runs waits for the hook. The earlier Node hook took 97.8 ms on the deny path and
 99.5 ms on the allow path; the binary takes 7.3 ms and 8.9 ms (median of 20 runs each).
 
-**Targets.** `dist/` commits the Apple Silicon macOS binary that `install.sh files` verifies and installs locally.
+**Targets.** `dist/` commits the Apple Silicon macOS binary, used for local installs and by `install.sh files` on a
+machine of that architecture.
 `.github/workflows/build.yml` builds five targets for every change: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
 `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` (cross-compiled) and `x86_64-pc-windows-msvc`; a tag `v*`
 publishes them plus one `SHA256SUMS` as a GitHub release, and every other run keeps them as workflow artifacts.
