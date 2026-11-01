@@ -1,12 +1,18 @@
 name: build
 
-# Tests on Linux, then builds the release binary for the three targets the project ships.
-# No extra system dependencies are needed: rusqlite is `bundled` (compiles its own SQLite) and
-# ureq uses rustls (no OpenSSL), so the stock stable toolchain on each runner is enough.
+# Test on one runner, then build the release binary for every target the project ships:
+# both macOS architectures, both Linux architectures and Windows x86_64.
+# No extra system dependencies on the runners: rusqlite is `bundled` (its own SQLite), ureq uses rustls
+# (no OpenSSL) and tree-sitter is a C parser built by the same cc, so the stock toolchain is enough.
+# A tag `v*` publishes the binaries and one SHA256SUMS as a GitHub release; every other run keeps them
+# as workflow artifacts.
 on:
   push:
     branches: [main]
+    tags: ["v*"]
+  pull_request:
   workflow_dispatch:
+
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,6 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
       - name: Test
         run: cargo test --manifest-path rust/Cargo.toml
 
@@ -28,19 +37,56 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS: the arm64 runner builds its own target; the x86_64 binary is a cross-build on the
+          # same runner (the macOS SDK ships both architectures).
           - os: macos-latest
             triple: aarch64-apple-darwin
+            target: ""
+          - os: macos-latest
+            triple: x86_64-apple-darwin
+            target: x86_64-apple-darwin
+          # Linux x86_64 is the runner's host target; arm64 is a cross-build with the distro compiler.
           - os: ubuntu-latest
             triple: x86_64-unknown-linux-gnu
+            target: ""
+          - os: ubuntu-latest
+            triple: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-gnu
+            cross: true
+          # Windows: MSVC host target; the `windows-latest` image has the required linker.
           - os: windows-latest
             triple: x86_64-pc-windows-msvc
+            target: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: ${{ matrix.triple }}
+
+      - name: Install the aarch64 Linux cross compiler
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
 
       - name: Build
-        run: cargo build --release --manifest-path rust/Cargo.toml
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          if [ -n "$target" ]; then
+            cargo build --release --manifest-path rust/Cargo.toml --target "$target"
+          else
+            cargo build --release --manifest-path rust/Cargo.toml
+          fi
 
       - name: Package (unix)
         if: runner.os != 'Windows'
@@ -49,9 +95,20 @@ jobs:
           set -euo pipefail
           mkdir -p dst
           name="decision-guard-${{ matrix.triple }}"
-          cp rust/target/release/decision-guard "dst/$name"
+          target="${{ matrix.target }}"
+          if [ -n "$target" ]; then
+            bin="rust/target/$target/release/decision-guard"
+          else
+            bin="rust/target/release/decision-guard"
+          fi
+          cp "$bin" "dst/$name"
           chmod 755 "dst/$name"
-          cd dst && shasum -a 256 "$name" > "$name.sha256.txt"
+          cd dst
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$name" > "$name.sha256.txt"
+          else
+            shasum -a 256 "$name" > "$name.sha256.txt"
+          fi
 
       - name: Package (windows)
         if: runner.os == 'Windows'
@@ -72,3 +129,32 @@ jobs:
           name: decision-guard-${{ matrix.triple }}
           path: dst/*
           if-no-files-found: error
+
+  release:
+    name: publish release assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # publishing the release assets
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # One SHA256SUMS in the layout `install.sh` and `dist/` already use, covering every binary.
+      - name: Build SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist
+          rm -f *.sha256.txt
+          sha256sum decision-guard-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/decision-guard-*
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true

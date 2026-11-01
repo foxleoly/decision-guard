@@ -1,7 +1,42 @@
 # decision-guard
 
-Asks before an AI coding agent runs a dangerous shell command. Works in Claude Code, Codex, Copilot CLI,
-OpenCode, Pi and OMP from one shared Rust binary.
+Asks before an AI coding agent runs a dangerous shell command. One shared Rust binary, wired into
+Claude Code, Codex, Copilot CLI, OpenCode, Pi and OMP.
+
+- **Deterministic rules first**: a built-in deny list, your deny patterns, recursive deletes, secrets leaving the
+  machine, your allow patterns and a read-only proof decide most commands with plain code — no model, no network.
+- **A decider model for the rest**: one calibrated `safe` / `risky` / `destructive` question, answered by OpenAI or any
+  server that speaks the System One format, including a local model.
+- **Everything is logged**: every decision, its latency and the raw API request/response, in a local SQLite file with a
+  built-in web viewer.
+
+## Quick start
+
+```bash
+# 1. Install the binary + wire every agent found on this machine (macOS Apple Silicon: prebuilt, checksum-verified)
+scripts/install.sh
+
+# 2. Point it at a decision service (either one)
+echo "$OPENAI_API_KEY" > ~/.decision-guard/key && chmod 600 ~/.decision-guard/key
+# ... or a local / self-hosted server in ~/.decision-guard/config.json:
+cat > ~/.decision-guard/config.json <<'EOF'
+{ "base_url": "http://127.0.0.1:11434/v1/systemone", "model": "nimble", "keep_alive": "24h" }
+EOF
+chmod 600 ~/.decision-guard/config.json
+
+# 3. Restart the agents (hooks load at startup; Codex: open /hooks once and trust the hook)
+
+# 4. Verify: ask an agent to run a recursive delete — it must stop for approval
+sqlite3 -header -column ~/.decision-guard/decisions.db \
+  "SELECT ts, agent, source, action, command FROM decisions ORDER BY id DESC LIMIT 5"
+```
+
+No key and no URL is also a valid install: deterministic rules keep working, and commands that need the model pass
+with a warning on stderr. See [Choose the decision service](#choose-the-decision-service).
+
+**Requirements:** Apple Silicon macOS for the prebuilt binary (other targets: build one, see
+[Install from source](#install-from-source-development)); an OpenAI key or a System One endpoint; `jq` only when
+`install.sh` edits JSON agent config; Rust only to rebuild or test.
 
 ## How it works
 
@@ -47,10 +82,10 @@ no cache, no network.
   the prompt says so. Run such a command yourself in a terminal if you mean it.
 - Then your own allow patterns (`allow`): a match skips the model with no warning. An allow entry is strict (no `;`,
   `&`, `|`, `<`, `>`, `$`, `(`, `)`, `\`, backtick or newline in the command) and can never override anything above it. See
-  "Your own allow/deny rules" below.
+  ["Your own allow/deny rules"](#your-own-allowdeny-rules).
 - Then the read-only fast path (`readonly`, on by default): when every part of the command is proven read-only (`rg`,
   `sed -n`, `cat`, `ls`, `git log`, a read-only `python3` script, ...), it is allowed with no model call. It only ever
-  skips the model and never overrides anything above it. See "Read-only fast path".
+  skips the model and never overrides anything above it. See ["Read-only fast path"](#read-only-fast-path).
 - Everything else is one `choice` question (`safe` / `risky` / `destructive`) to `POST /v1/decisions`.
   Pricing at the time of writing is $0.10 per 1M input tokens and nothing for output; about 0.3 s per new command on
   OpenAI. A local model is slower: on one local service the median was 2.3 s per new command.
@@ -58,9 +93,10 @@ no cache, no network.
   whether the user explicitly asked for exactly this command. A yes skips the prompt. The two questions of one decision
   share one HTTP connection.
 - Verdicts are cached per exact command in `~/.decision-guard/cache.json` (max 2000 entries).
-- Every decision is also logged to a local SQLite database (see Audit log below).
+- Every decision is also logged to a local SQLite database (see [Audit log](#audit-log)).
 - No key, API error or timeout: the command is allowed, with a warning on stderr (denied instead when
-  `DECISION_GUARD_FAIL_CLOSED` is set). The whole decision is bounded by `budget_ms` (default 12000).
+  `DECISION_GUARD_FAIL_CLOSED` is set, or `agents.<name>.fail_closed` in `config.json`). The whole decision is bounded
+  by `budget_ms` (default 12000).
 
 ## The binary
 
@@ -70,54 +106,50 @@ the system libraries, and SQLite is built in, so there is no runtime to install)
 | Subcommand | Does |
 |---|---|
 | `decision-guard hook <claude\|codex\|copilot\|opencode\|pi>` | Reads the agent's JSON payload on stdin and prints its decision. Always exits 0 (Copilot reads a non-zero `preToolUse` exit as a deny). The command hooks of Claude Code, Codex and Copilot CLI call it directly; the OpenCode plugin and the Pi/OMP extension in `scripts/adapters/` are thin wrappers that spawn it |
-| `decision-guard web [--port N] [--db PATH] [--config PATH]` | The local web viewer (see "Web viewer") |
-| `decision-guard archive [--keep-days N] [--dry-run] [--db PATH] [--out DIR]` | The weekly log archive (see "Archive") |
-| `decision-guard check [--no-config]` | Dry-runs one command per line (or JSON lines) through the deterministic stages and prints the stage that decides; no model, no cache, no log row (see "Read-only fast path") |
+| `decision-guard web [--port N] [--db PATH] [--config PATH]` | The local web viewer (see ["Web viewer"](#web-viewer)) |
+| `decision-guard archive [--keep-days N] [--dry-run] [--db PATH] [--out DIR]` | The weekly log archive (see ["Archive"](#archive-a-weekly-clean-up)) |
+| `decision-guard check [--no-config]` | Dry-runs one command per line (or JSON lines) through the deterministic stages and prints the stage that decides; no model, no cache, no log row (see ["Read-only fast path"](#read-only-fast-path)) |
 | `decision-guard service [<name>] [--config PATH]` | Lists the services `config.json` names under `services` and switches which one `active` points at. With no name it only prints, and writes nothing |
 
 Why a binary: every command an agent runs waits for the hook. The earlier Node hook took 97.8 ms on the deny path and
 99.5 ms on the allow path; the binary takes 7.3 ms and 8.9 ms (median of 20 runs each).
 
-**How it is installed.** The built binaries are committed in `dist/`, with a `SHA256SUMS` file. `install.sh files`
-picks `dist/decision-guard-<target-triple>` for this machine, checks it against `SHA256SUMS`, and only then copies it
-to `~/.decision-guard/bin/decision-guard` (copy, then rename, so a running binary is never overwritten in place). A missing
-artifact or a checksum mismatch stops the install; there is no fallback to anything else.
-
-**Rebuild it.** Needs a Rust toolchain (`cargo`, `rustc`):
-
-```bash
-rust/scripts/build-dist.sh   # release build for this machine, refreshes dist/ and SHA256SUMS
-```
-
-Rebuild and commit `dist/` whenever the Rust source changes, or the installed binary will not match the code.
-
-**Targets.** Only `aarch64-apple-darwin` (Apple Silicon macOS) is prebuilt. On any other machine `install.sh files`
-stops with "no prebuilt binary" until a binary for that machine exists. To add a target, run `build-dist.sh` on a machine
-of that target and commit the new `dist/decision-guard-<triple>` and the updated `SHA256SUMS`. `install.sh` already maps
-`x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`; any other triple needs one more
-line in the `case` of `verify_binary` in `scripts/install.sh`.
-
-**Test it.**
-
-```bash
-cd rust && cargo test   # offline; runs the real binary against fake servers and a private HOME
-```
+**Targets.** `dist/` commits the Apple Silicon macOS binary that `install.sh files` verifies and installs locally.
+`.github/workflows/build.yml` builds five targets for every change: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
+`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` (cross-compiled) and `x86_64-pc-windows-msvc`; a tag `v*`
+publishes them plus one `SHA256SUMS` as a GitHub release, and every other run keeps them as workflow artifacts.
+`install.sh` maps all five. On Windows (Git Bash/MSYS) it installs `bin/decision-guard.exe` and writes the absolute
+path into the hook files, because `$HOME` is not expanded by cmd/pwsh. Any other triple needs one more line in the
+`case` of `verify_binary` in `scripts/install.sh`.
 
 ## Install
 
-### Requirements
+Run everything from the repository root.
 
-| Need | For |
-|---|---|
-| Apple Silicon macOS, or a prebuilt binary you built for your target (see "The binary") | the guard itself; nothing else to install |
-| `jq` | `install.sh`, only to merge hook entries into Claude Code, Codex or OpenCode JSON config |
-| Rust toolchain | only to rebuild the binary or run the tests |
-| An OpenCode, Pi or OMP install | their adapters run inside the agent's own JavaScript runtime and call the binary |
-| An OpenAI key, or the URL of your own decision service | the model judgement; without one, commands pass through with a warning |
+### What `install.sh` does
+
+| Target | Writes | Backup |
+|---|---|---|
+| `files` | Installs the checksum-verified binary as `~/.decision-guard/bin/decision-guard` and the two adapters into `~/.decision-guard/` (mode 700), and removes the old Node copies there (`core.mjs`, `hook.mjs`, `web.mjs`, `web-page.html`, `archive.mjs`, by name). Never touches `key`, `config.json`, `cache.json`, `decisions.db` | none needed |
+| `skill` | Symlinks this skill directory as `decision-guard` into `~/.claude/skills`, `~/.codex/skills`, `~/.omp/agent/skills`, `~/.pi/agent/skills`, `~/.config/opencode/skills` and `~/.copilot/skills`, for the agents that exist. A real directory already named `decision-guard` there is left alone | none (new links) |
+| `pi` | Symlinks `~/.omp/agent/extensions/decision-guard.ts` and `~/.pi/agent/extensions/decision-guard.ts`, only for the ones whose `~/.omp` or `~/.pi` exists | none (new files) |
+| `opencode` | Symlinks `~/.config/opencode/plugins/decision-guard.js` | none (new file) |
+| `claude` | Appends a `PreToolUse` (matcher `Bash`) and a `UserPromptSubmit` entry to `~/.claude/settings.json` | `settings.json.bak-decision-guard` |
+| `codex` | Same two entries in `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`) | `hooks.json.bak-decision-guard` |
+| `copilot` | Creates `~/.copilot/hooks/decision-guard.json` (or under `$COPILOT_HOME`) | none (new file) |
+| `opencode-ask` | Sets `permission.bash["*"]` to `"ask"` in `~/.config/opencode/opencode.json` | `opencode.json.bak-decision-guard` |
+| `archive` | macOS: a LaunchAgent `~/Library/LaunchAgents/com.decision-guard.archive.plist` that runs `decision-guard archive` weekly. Elsewhere: prints a crontab line | none (new file) |
+
+Existing hooks are left alone; only decision-guard entries are added. A missing `settings.json` or `hooks.json` is created
+(an empty object plus the hook entries) when the agent's directory exists, and skipped otherwise. An existing file that is not valid JSON stops the script.
+The script is idempotent: running a target again reports `already wired`.
+
+`opencode-ask` is optional. OpenCode can only show a real prompt for commands whose permission is `"ask"`, so this makes
+every bash command pass through the plugin: safe ones run without a prompt, risky ones get OpenCode's own prompt.
+More specific rules such as `"git push*": "ask"` keep working. If the plugin ever fails to load, every bash command
+then prompts. Without it, OpenCode rejects commands that need approval.
 
 ### Steps
-
-Run from the repository root.
 
 1. **Preview.** Nothing is written:
 
@@ -143,41 +175,59 @@ Run from the repository root.
    scripts/install.sh codex            # ~/.codex/hooks.json
    scripts/install.sh copilot          # ~/.copilot/hooks/decision-guard.json
    scripts/install.sh opencode         # OpenCode plugin
-   scripts/install.sh opencode-ask     # optional, see below
+   scripts/install.sh opencode-ask     # optional, see above
+   scripts/install.sh archive          # optional, weekly log cleanup
    ```
 
    `opencode-ask` and `archive` are never part of the automatic set.
 
 3. **Choose the decision service.** An OpenAI key in `~/.decision-guard/key` (`chmod 600`) or `OPENAI_API_KEY`, or a base URL
-   (and key) for your own server in `~/.decision-guard/config.json`. See "Choose the decision service" below.
-   Never commit either file; they live outside this repository.
+   (and key) for your own server in `~/.decision-guard/config.json`. See
+   ["Choose the decision service"](#choose-the-decision-service). Never commit either file; they live outside this
+   repository.
 
 4. **Restart the agent.** Hooks and extensions load at startup.
 
 5. **Codex only:** open `/hooks` and trust the new hook(s). Codex skips hooks it has not reviewed.
 
-### What each target changes
+### Install a CI-built binary (macOS x86_64, Linux, Windows)
 
-| Target | Writes | Backup |
-|---|---|---|
-| `files` | Installs the checksum-verified binary as `~/.decision-guard/bin/decision-guard` and the two adapters into `~/.decision-guard/` (mode 700), and removes the old Node copies there (`core.mjs`, `hook.mjs`, `web.mjs`, `web-page.html`, `archive.mjs`, by name). Never touches `key`, `config.json`, `cache.json`, `decisions.db` | none needed |
-| `skill` | Symlinks this skill directory as `decision-guard` into `~/.claude/skills`, `~/.codex/skills`, `~/.omp/agent/skills`, `~/.pi/agent/skills`, `~/.config/opencode/skills` and `~/.copilot/skills`, for the agents that exist. A real directory already named `decision-guard` there is left alone | none (new links) |
-| `pi` | Symlinks `~/.omp/agent/extensions/decision-guard.ts` and `~/.pi/agent/extensions/decision-guard.ts`, only for the ones whose `~/.omp` or `~/.pi` exists | none (new files) |
-| `opencode` | Symlinks `~/.config/opencode/plugins/decision-guard.js` | none (new file) |
-| `claude` | Appends a `PreToolUse` (matcher `Bash`) and a `UserPromptSubmit` entry to `~/.claude/settings.json` | `settings.json.bak-decision-guard` |
-| `codex` | Same two entries in `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`) | `hooks.json.bak-decision-guard` |
-| `copilot` | Creates `~/.copilot/hooks/decision-guard.json` (or under `$COPILOT_HOME`) | none (new file) |
-| `opencode-ask` | Sets `permission.bash["*"]` to `"ask"` in `~/.config/opencode/opencode.json` | `opencode.json.bak-decision-guard` |
-| `archive` | macOS: a LaunchAgent `~/Library/LaunchAgents/com.decision-guard.archive.plist` that runs `decision-guard archive` weekly. Elsewhere: prints a crontab line | none (new file) |
+Download the workflow artifact or the release asset for your target, put it in `dist/`, refresh `SHA256SUMS`, and let
+`install.sh files` verify and install it:
 
-Existing hooks are left alone; only decision-guard entries are added. A missing `settings.json` or `hooks.json` is created
-(an empty object plus the hook entries) when the agent's directory exists, and skipped otherwise. An existing file that is not valid JSON stops the script.
-The script is idempotent: running a target again reports `already wired`.
+```bash
+mkdir -p dist
+cp ~/Downloads/decision-guard-x86_64-pc-windows-msvc.exe dist/   # or whichever asset you downloaded
+(cd dist && shasum -a 256 decision-guard-* > SHA256SUMS)   # sha256sum on Linux
+scripts/install.sh files
+```
 
-`opencode-ask` is optional. OpenCode can only show a real prompt for commands whose permission is `"ask"`, so this makes
-every bash command pass through the plugin: safe ones run without a prompt, risky ones get OpenCode's own prompt.
-More specific rules such as `"git push*": "ask"` keep working. If the plugin ever fails to load, every bash command
-then prompts. Without it, OpenCode rejects commands that need approval.
+The Windows asset is `decision-guard-x86_64-pc-windows-msvc.exe`; run `install.sh` from Git Bash or MSYS, which is what
+the script needs. The installed binary is then `~/.decision-guard/bin/decision-guard.exe` and the hook files carry its
+absolute path.
+
+### Install from source (development)
+
+`install.sh files` installs the **prebuilt** binary from `dist/`, verified against `SHA256SUMS` — not the working tree.
+If you changed `rust/`, either rebuild the committed artifact or install your build directly:
+
+```bash
+# A. The normal path: rebuild dist/ and SHA256SUMS, then install that artifact
+rust/scripts/build-dist.sh
+scripts/install.sh files
+
+# B. Development shortcut: use the cargo build in place (skips the checksum guard)
+cd rust && cargo build --release && cd ..
+cp rust/target/release/decision-guard ~/.decision-guard/bin/decision-guard
+```
+
+Verify the installed binary is the one you built:
+
+```bash
+shasum -a 256 ~/.decision-guard/bin/decision-guard rust/target/release/decision-guard
+```
+
+Rebuild and commit `dist/` whenever the Rust source changes, or the installed binary will not match the code.
 
 ### Verify
 
@@ -193,6 +243,9 @@ without `opencode-ask`, a rejection that names the directory). Then check the lo
 sqlite3 -header -column ~/.decision-guard/decisions.db "SELECT ts, agent, source, action, command FROM decisions ORDER BY id DESC LIMIT 5"
 ```
 
+A row with `source = api` proves the decision service answered; `source = error` (with `fail_open` set) means the command
+was not judged and passed through.
+
 ### Update
 
 Pull the repository, then run `install.sh` with no target. It installs the newer binary and rewrites each agent's hook
@@ -204,7 +257,7 @@ Agents pick up the new binary on their next start.
 ### Uninstall
 
 ```bash
-# OMP / Pi / OpenCode
+# OMP / Pi / OpenCode / Copilot
 rm -f ~/.omp/agent/extensions/decision-guard.ts ~/.pi/agent/extensions/decision-guard.ts \
       ~/.config/opencode/plugins/decision-guard.js ~/.copilot/hooks/decision-guard.json
 
@@ -269,8 +322,9 @@ beats both, so a hand-edited file cannot leave the guard without a service by ac
 | `timeout_ms` | `DECISION_GUARD_TIMEOUT_MS` | Milliseconds to wait for one answer, default 8000 |
 | `budget_ms` | `DECISION_GUARD_BUDGET_MS` | Milliseconds the **whole** decision may take, default 12000. It must stay below the agent's own hook limit (OMP/Pi 30 s, Claude Code and Codex hooks 15 s), which blocks the command when exceeded. Past it the command is not judged: allowed with a warning, or denied with `DECISION_GUARD_FAIL_CLOSED`. The deterministic rules never wait for the model |
 | `keep_alive` | `DECISION_GUARD_KEEP_ALIVE` | Sent to your own service with every request (for example `"24h"`) so Ollama keeps the model loaded; left out when unset |
-| `ask_p`, `user_p` | `DECISION_GUARD_ASK_P`, `DECISION_GUARD_USER_P` | Thresholds, see "Tuning" |
+| `ask_p`, `user_p` | `DECISION_GUARD_ASK_P`, `DECISION_GUARD_USER_P` | Thresholds, see ["Tuning"](#tuning) |
 | `archive_keep_days` | `DECISION_GUARD_ARCHIVE_KEEP_DAYS` | How many days stay in the live log when archiving, default 30 |
+| `agents.<name>.fail_closed` | — | Per-agent: deny instead of allow when the service cannot be reached. Default `false` |
 
 Environment variables win over `config.json`. Use the file for agents started from a GUI, which do not see your shell profile.
 
@@ -350,14 +404,14 @@ that one command unjudged. Warm the server once after starting it (any request w
 | Variable | Default | Effect |
 |---|---|---|
 | `DECISION_GUARD_ASK_P` (or `ask_p` in `config.json`) | `0.5` | Probability of "destructive" at which approval is required. 0.3 caught two commands that scored 0.32 and 0.46 in our tests |
-| `DECISION_GUARD_USER_P` (or `user_p`) | `0.85` | Probability that the user asked for this exact command at which the question is skipped |
-| `DECISION_GUARD_FAIL_CLOSED` | unset | Deny, instead of allow, when a command could not be judged |
+| `DECISION_GUARD_USER_P` (or `user_p` in `config.json`) | `0.85` | Probability that the user asked for this exact command at which the question is skipped |
+| `DECISION_GUARD_FAIL_CLOSED` (or `agents.<name>.fail_closed` in `config.json`) | unset / `false` | Deny, instead of allow, when a command could not be judged |
 | `DECISION_GUARD_TIMEOUT_MS` (or `timeout_ms` in `config.json`) | `8000` | How long to wait for the service; raise it for a local model, which needs seconds to start after idling |
-| `DECISION_GUARD_READONLY` (or `readonly` in `config.json`) | on | `0` / `false` turns the read-only fast path off, anything else non-empty turns it on; the variable wins over the file. See "Read-only fast path" |
+| `DECISION_GUARD_READONLY` (or `readonly` in `config.json`) | on | `0` / `false` turns the read-only fast path off, anything else non-empty turns it on; the variable wins over the file. See ["Read-only fast path"](#read-only-fast-path) |
 
 Out-of-range values fall back to the default, so a stray variable cannot switch the guard off. Without the variable
 set, a missing service or an API failure prints a warning on stderr and lets the command through. The service
-variables are described under "Choose the decision service".
+variables are described under ["Choose the decision service"](#choose-the-decision-service).
 
 ## Read-only fast path
 
@@ -421,7 +475,7 @@ binary (3.8 MB before, about 4.8 MB in a release build now).
 ## Your own allow/deny rules
 
 Edit `allow` and `deny` in `~/.decision-guard/config.json` (`chmod 600`), each a list of glob patterns, or use the
-"Rules" tab of the web viewer (see "Web viewer" below), which validates as you type and lets you dry-run a command
+"Rules" tab of the web viewer (see ["Web viewer"](#web-viewer)), which validates as you type and lets you dry-run a command
 before saving.
 
 ```json
@@ -441,13 +495,12 @@ before saving.
   entries must start with a literal command word (not `*`). An entry cannot be in both lists. At most 200 entries per
   list. The web viewer and the guard use the exact same validation and matching code, so they cannot drift apart.
 
-
 ## Audit log
 
 Every command the guard sees is appended to `~/.decision-guard/decisions.db` (SQLite, mode 600), including
 cache hits and rule hits, so you can look back at what the agents ran. The raw request and response of every call to
-the decision service are kept alongside (see "The raw API requests"). Logging never blocks or fails a command.
-Logging never needs anything installed: SQLite is built into the binary.
+the decision service are kept alongside (see ["The raw API requests"](#the-raw-api-requests)). Logging never blocks or
+fails a command. Logging never needs anything installed: SQLite is built into the binary.
 
 | Column | Meaning |
 |---|---|
@@ -461,6 +514,7 @@ Logging never needs anything installed: SQLite is built into the binary.
 | `user_requested` | Probability the user's own message asked for it; only measured when the model would have asked |
 | `session_id` | The agent's session, to follow one conversation |
 | `action` | `allow`, `ask` or `deny`: what the guard decided, **not** what you then answered |
+| `fail_open` | Why a command went unjudged: `timeout`, `unreachable`, `no_service` or `parse`; empty when judged |
 | `latency_ms`, `input_tokens`, `error` | Cost and failure details |
 
 ```bash
@@ -593,7 +647,6 @@ and `readonly` keys of `config.json` (atomically, mode 600; `readonly` only when
 returning them; `/api/check` never writes anything and never calls the model. Commands are shown as typed and can
 include secrets, so do not forward the port. It has no login; anyone who can reach `127.0.0.1` on the machine can read
 the log and edit the rules.
-
 
 ## Test
 

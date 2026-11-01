@@ -18,6 +18,14 @@ set -euo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DG="$HOME/.decision-guard"
 DRY=0
+# Windows (Git Bash/MSYS) binaries carry .exe, and hook files are run by cmd/pwsh where $HOME is not
+# expanded: use the absolute path there. On Unix the hook keeps "$HOME/..." as before.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) EXE=.exe ;; *) EXE= ;; esac
+if [ -n "$EXE" ]; then
+	HOOK_BIN="$(cygpath -w "$DG/bin/decision-guard$EXE" 2>/dev/null || printf '%s' "$DG/bin/decision-guard$EXE")"
+else
+	HOOK_BIN='$HOME/.decision-guard/bin/decision-guard'
+fi
 TARGETS=()
 for arg in "$@"; do
 	if [ "$arg" = "--dry-run" ]; then DRY=1; else TARGETS+=("$arg"); fi
@@ -47,9 +55,10 @@ verify_binary() {
 	Darwin/x86_64) triple=x86_64-apple-darwin ;;
 	Linux/x86_64) triple=x86_64-unknown-linux-gnu ;;
 	Linux/aarch64 | Linux/arm64) triple=aarch64-unknown-linux-gnu ;;
+	MINGW*/* | MSYS*/* | CYGWIN*/*) triple=x86_64-pc-windows-msvc ;;
 	*) triple="$(uname -s)-$(uname -m)" ;;
 	esac
-	name="decision-guard-$triple"
+	name="decision-guard-$triple$EXE"
 	want=$(awk -v f="$name" '$2 == f { print $1 }' "$DIST/SHA256SUMS" 2>/dev/null || true)
 	if [ ! -f "$DIST/$name" ] || [ -z "$want" ]; then
 		echo "error: no prebuilt binary for $triple in $DIST (or it is missing from SHA256SUMS)." >&2
@@ -74,7 +83,7 @@ merge_hooks_json() { # file tool
 	if [ -f "$file" ]; then cur=$(jq . "$file")
 	elif [ -d "$(dirname "$file")" ]; then cur='{}'
 	else echo "skip $file ($(dirname "$file") missing)"; return; fi
-	out=$(jq --arg cmd "\"\$HOME/.decision-guard/bin/decision-guard\" hook $tool" '
+	out=$(jq --arg cmd "\"$HOOK_BIN\" hook $tool" '
 		def wired(ev): any(.hooks[ev][]?.hooks[]?; (.command // "") | contains("decision-guard/bin/decision-guard"));
 		# entries from the old Node hook are switched to the binary in place
 		((.hooks[]?[]?.hooks[]? | select((.command // "") | contains("decision-guard/hook.mjs")) | .command) |= $cmd)
@@ -125,17 +134,17 @@ if want files; then
 	done
 	run cp "$SRC/adapters/pi.ts" "$SRC/adapters/opencode.js" "$DG/adapters/"
 	# Copy then rename: overwriting a running binary in place breaks its code signature on macOS.
-	run cp "$BIN_SRC" "$DG/bin/.decision-guard.new"
-	run chmod 755 "$DG/bin/.decision-guard.new"
-	run mv "$DG/bin/.decision-guard.new" "$DG/bin/decision-guard"
-	echo "copy $DG   (review the log in a browser: $DG/bin/decision-guard web)"
+	run cp "$BIN_SRC" "$DG/bin/.decision-guard$EXE.new"
+	run chmod 755 "$DG/bin/.decision-guard$EXE.new"
+	run mv "$DG/bin/.decision-guard$EXE.new" "$DG/bin/decision-guard$EXE"
+	echo "copy $DG   (review the log in a browser: $DG/bin/decision-guard$EXE web)"
 	if [ "${STALE:-0}" = 1 ] && ! want claude && ! want codex && ! want copilot; then echo "note: agent hooks that still ran the removed hook.mjs need install.sh with no target (or claude, codex, copilot) to switch to the binary"; fi
 	if grep -qs "archive.mjs" "$HOME/Library/LaunchAgents/com.decision-guard.archive.plist"; then echo "note: the weekly archive job still runs archive.mjs; re-run install.sh archive"; fi
 	ask_service
 fi
 if want archive; then
 	# Weekly archive of old log rows (decision-guard archive). macOS: a LaunchAgent, Sundays 03:30. Elsewhere: print a cron line.
-	if ! want files && [ ! -x "$DG/bin/decision-guard" ]; then echo "note: $DG/bin/decision-guard is missing; run install.sh files first or the job has nothing to run"; fi
+	if ! want files && [ ! -x "$DG/bin/decision-guard$EXE" ]; then echo "note: $DG/bin/decision-guard$EXE is missing; run install.sh files first or the job has nothing to run"; fi
 	if [ "$(uname)" = "Darwin" ]; then
 		plist="$HOME/Library/LaunchAgents/com.decision-guard.archive.plist"
 		run mkdir -p "$(dirname "$plist")"
@@ -196,16 +205,21 @@ if want copilot; then
 	# Copilot CLI reads its own hook file, so nothing to merge. PascalCase event names = Claude-compatible payloads.
 	file="${COPILOT_HOME:-$HOME/.copilot}/hooks/decision-guard.json"
 	run mkdir -p "$(dirname "$file")"
+	if [ -n "$EXE" ]; then
+		copilot_bash="\"${HOOK_BIN//\\/\\\\}\" hook copilot"
+	else
+		copilot_bash='\"$HOME/.decision-guard/bin/decision-guard\" hook copilot'
+	fi
 	if [ "$DRY" = 0 ]; then
-		cat > "$file" <<'EOF'
+		cat > "$file" <<EOF
 {
   "version": 1,
   "hooks": {
     "PreToolUse": [
-      { "type": "command", "matcher": "Bash", "bash": "\"$HOME/.decision-guard/bin/decision-guard\" hook copilot", "timeoutSec": 15 }
+      { "type": "command", "matcher": "Bash", "bash": "$copilot_bash", "timeoutSec": 15 }
     ],
     "UserPromptSubmit": [
-      { "type": "command", "bash": "\"$HOME/.decision-guard/bin/decision-guard\" hook copilot", "timeoutSec": 15 }
+      { "type": "command", "bash": "$copilot_bash", "timeoutSec": 15 }
     ]
   }
 }
@@ -216,7 +230,7 @@ fi
 
 if [ "$DRY" = 0 ] && want files; then
 	# Deterministic rule, no model needed: a recursive delete must come back as "ask".
-	verdict=$(echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/decision-guard-smoke-test"},"cwd":"/tmp"}' | "$DG/bin/decision-guard" hook claude 2>/dev/null || true)
+	verdict=$(echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/decision-guard-smoke-test"},"cwd":"/tmp"}' | "$DG/bin/decision-guard$EXE" hook claude 2>/dev/null || true)
 	case "$verdict" in
 	*'"ask"'*) echo "check: recursive delete is held for approval: ok" ;;
 	*) echo "check FAILED: the hook did not ask for 'rm -rf'; output was: ${verdict:-<empty>}" >&2; exit 1 ;;
