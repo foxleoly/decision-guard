@@ -50,10 +50,10 @@ rm -rf /Users/foxleoly*
 
 | config | cases | reached model | rate |
 |---|---|---|---|
-| baseline (independent HOME, no rules.db) | 347 | 272 | 78.4% |
+| baseline (independent HOME, no rules.db) | 347 | 270 | 77.8% |
 | with-lists (independent HOME, seeded) | 347 | 198 | 57.1% |
 
-Model-call rate drops **+21.3 pp** when the live lists are active.
+Model-call rate drops **+20.7 pp** when the live lists are active.
 
 ## How the with-lists run avoided the model
 
@@ -74,9 +74,10 @@ Each case that skipped the model is attributed to the stage that decided it in t
 
 | stage | n | share | P50 ms | P95 ms | P99 ms | max ms |
 |---|---|---|---|---|---|---|
-| `api` | 272 | 78% | 1429.000 | 2168.150 | 2699.020 | 6634.000 |
-| `rule` | 75 | 22% | 2.000 | 5.000 | 6.260 | 7.000 |
-| **all** | 347 | 100% | 1407.000 | 2100.400 | 2650.740 | 6634.000 |
+| `api` | 270 | 78% | 1411.000 | 3731.600 | 4655.390 | 11456.000 |
+| `rule` | 75 | 22% | 2.000 | 6.000 | 8.000 | 8.000 |
+| `error` | 2 | 1% | 12001.500 | 12001.950 | 12001.990 | 12002.000 |
+| **all** | 347 | 100% | 1392.000 | 3648.400 | 5306.600 | 12002.000 |
 
 ### With lists (independent HOME)
 
@@ -84,9 +85,9 @@ Each case that skipped the model is attributed to the stage that decided it in t
 
 | stage | n | share | P50 ms | P95 ms | P99 ms | max ms |
 |---|---|---|---|---|---|---|
-| `api` | 198 | 57% | 1465.000 | 2347.800 | 2772.310 | 7565.000 |
-| `rule` | 149 | 43% | 2.000 | 5.000 | 7.000 | 7.000 |
-| **all** | 347 | 100% | 1375.000 | 2200.000 | 2717.340 | 7565.000 |
+| `api` | 198 | 57% | 1399.500 | 2222.400 | 2512.100 | 6630.000 |
+| `rule` | 149 | 43% | 2.000 | 5.000 | 8.520 | 10.000 |
+| **all** | 347 | 100% | 1333.000 | 2064.700 | 2499.240 | 6630.000 |
 
 ## Repeat-heavy slice (32 distinct commands, 95 cases)
 

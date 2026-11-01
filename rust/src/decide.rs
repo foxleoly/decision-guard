@@ -125,6 +125,33 @@ pub fn decide(command: &str, cwd: &str, agent: &str, ctx: &Context) -> Result<De
     // Every request sent to the service for this command is kept, as sent and as received.
     let finish =
         |mut result: Decision, source: &'static str, logged: Logged, calls: &[Call]| -> Decision {
+            // `fail_open` records *why* the command passed without a model verdict so the viewer can
+            // surface it. `no_service` is no configured service at all; the other two are classified
+            // from the judge's error text: timeouts are their own class, everything else
+            // (refused connection, HTTP error, unparseable body) is `unreachable` / `parse`.
+            let fail_open = match source {
+                "no_service" => Some("no_service"),
+                "error" => {
+                    let err = logged.error.as_deref().unwrap_or("");
+                    let kind = if err.contains("timeout")
+                        || err.contains("aborted")
+                        || err.contains("budget used up")
+                    {
+                        "timeout"
+                    } else if err.contains("parse") || err.contains("invalid") || err.contains("expecting")
+                        || err.contains("JSON")
+                        || err.contains("invalid JSON")
+                        || err.contains("unexpected")
+                        || err.contains("trailing")
+                    {
+                        "parse"
+                    } else {
+                        "unreachable"
+                    };
+                    Some(kind)
+                }
+                _ => None,
+            };
             store::record(
                 &Row {
                     agent,
@@ -143,6 +170,7 @@ pub fn decide(command: &str, cwd: &str, agent: &str, ctx: &Context) -> Result<De
                     latency_ms: started.elapsed().as_millis() as i64,
                     input_tokens: logged.input_tokens,
                     error: logged.error.as_deref(),
+                    fail_open,
                 },
                 calls,
                 svc_ref,
@@ -150,14 +178,24 @@ pub fn decide(command: &str, cwd: &str, agent: &str, ctx: &Context) -> Result<De
             result.source = Some(source);
             result
         };
-    // Not judged (no service / API down): allow with a warning, or deny when the user asked for fail-closed.
+    // Not judged (no service / API down): allow with a warning, or deny when fail-closed is set for this agent.
+    // The environment switch applies to every agent; `agents.<agent>.fail_closed` in config.json is a per-agent
+    // override with the same deny semantics.
+    let agent_fail_closed = judge::agent_fail_closed(&cfg, agent);
     let unjudged =
         |warning: String, source: &'static str, logged: Logged, calls: &[Call]| -> Decision {
-            let result = if fail_closed {
-                Decision {
-                    reason: Some(format!(
+            let result = if fail_closed || agent_fail_closed {
+                let reason = if fail_closed {
+                    format!(
                         "decision-guard: {warning}, and DECISION_GUARD_FAIL_CLOSED is set"
-                    )),
+                    )
+                } else {
+                    format!(
+                        "decision-guard: {warning}, and agents.{agent}.fail_closed is set"
+                    )
+                };
+                Decision {
+                    reason: Some(reason),
                     ..plain(Action::Deny)
                 }
             } else {

@@ -6,3 +6,5 @@ rust/target/
 
 # dist/ holds the committed prebuilt binaries; the repo-wide "dist/" rule must not hide them
 !dist/
+__pycache__/
+*.pyc

@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS decisions (
 	action TEXT NOT NULL,       -- allow | ask | deny: what the guard decided, not what the user then answered
 	latency_ms INTEGER NOT NULL,
 	input_tokens INTEGER,       -- api only
-	error TEXT
+	error TEXT,
+	fail_open TEXT            -- why the fail-open path fired: timeout | unreachable | no_service | parse
 );
 CREATE TABLE IF NOT EXISTS prompts (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,12 +59,13 @@ CREATE TABLE IF NOT EXISTS api_calls (
 );";
 
 /// Columns added after the first release; an older decisions.db gets them on first open.
-const ADDED_COLUMNS: [(&str, &str); 5] = [
+const ADDED_COLUMNS: [(&str, &str); 6] = [
     ("session_id", "TEXT"),
     ("user_requested", "REAL"),
     ("provider", "TEXT"),
     ("model", "TEXT"),
     ("rule", "TEXT"),
+    ("fail_open", "TEXT"),
 ];
 
 /// Opens (creating and migrating if needed) the database and runs `f` against it. Never fails the caller: logging must
@@ -87,6 +89,13 @@ pub fn with_db<T>(f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> Option<
         // The directory-delete rule was the only rule before this column existed.
         if !have.contains("rule") {
             db.execute_batch("UPDATE decisions SET rule = 'dir-delete' WHERE source = 'rule'")?;
+        }
+        // Backfill fail_open for pre-existing unjudged rows (older databases have NULL there).
+        if !have.contains("fail_open") {
+            db.execute_batch(
+                "UPDATE decisions SET fail_open = CASE source WHEN 'no_service' THEN 'no_service' ELSE 'unreachable' END
+                 WHERE source IN ('no_service', 'error') AND fail_open IS NULL",
+            )?;
         }
         f(&db)
     })()
@@ -116,14 +125,17 @@ pub struct Row<'a> {
     pub latency_ms: i64,
     pub input_tokens: Option<f64>,
     pub error: Option<&'a str>,
+    /// Set only on the fail-open path: why the command passed without a verdict
+    /// (`timeout | unreachable | no_service | parse`). NULL for every judged decision.
+    pub fail_open: Option<&'a str>,
 }
 
 /// Stores a decision and, linked to it, every API call made for it. `svc` is the service in force (if any).
 pub fn record(row: &Row, calls: &[Call], svc: Option<&Service>) -> Option<()> {
     with_db(|db| {
         db.execute(
-            "INSERT INTO decisions (ts, agent, session_id, cwd, command, source, rule, provider, model, choice, confidence, probabilities, user_requested, action, latency_ms, input_tokens, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            params![iso_now(), row.agent, row.session_id, row.cwd, row.command, row.source, row.rule, row.provider, row.model, row.choice, row.confidence, row.probabilities, row.user_requested, row.action, row.latency_ms, row.input_tokens, row.error],
+            "INSERT INTO decisions (ts, agent, session_id, cwd, command, source, rule, provider, model, choice, confidence, probabilities, user_requested, action, latency_ms, input_tokens, error, fail_open) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![iso_now(), row.agent, row.session_id, row.cwd, row.command, row.source, row.rule, row.provider, row.model, row.choice, row.confidence, row.probabilities, row.user_requested, row.action, row.latency_ms, row.input_tokens, row.error, row.fail_open],
         )?;
         let id = db.last_insert_rowid();
         let mut insert = db.prepare("INSERT INTO api_calls (decision_id, ts, provider, model, url, purpose, request, status, response, latency_ms, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")?;

@@ -182,6 +182,18 @@ fn pick_ms(env: Env, env_key: &str, file: &Value, file_key: &str, fallback: f64)
     }
 }
 
+/// Per-agent fail-closed switch from config.json: `agents.<name>.fail_closed`.
+/// The environment switch (`DECISION_GUARD_FAIL_CLOSED`) still applies to every agent and is checked first;
+/// this one is the per-agent override in the file. When `true` and the active service errors or times out,
+/// the verdict becomes a deny instead of the default fail-open allow. Default is `false` (fail-open).
+pub fn agent_fail_closed(file: &Value, agent: &str) -> bool {
+    file.get("agents")
+        .and_then(|a| a.get(agent))
+        .and_then(|a| a.get("fail_closed"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 /// config.json's picked service: `{"services": {"<name>": {base_url, model, ...}}, "active": "<name>"}`. The keys of
 /// the chosen object win over the top-level ones, so an entry only states what differs from them. A missing name, a
 /// missing entry or a non-object entry falls back to the top level, which keeps a hand-edited file working.
