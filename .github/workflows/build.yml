@@ -66,7 +66,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
-          key: ${{ matrix.triple }}
+          key: ${{ matrix.triple }}-remap1
 
       - name: Install the aarch64 Linux cross compiler
         if: matrix.cross
@@ -83,6 +83,11 @@ jobs:
           set -euo pipefail
           # The shipped binary must not carry the builder's paths (same rule as rust/scripts/build-dist.sh).
           export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=./cargo --remap-path-prefix=$GITHUB_WORKSPACE=./"
+          # cc-built C sources (tree-sitter, SQLite) take their __FILE__ paths from the compiler, not rustc's
+          # --remap-path-prefix. Remap those too; the cached build script output must be invalidated for it (key).
+          if [ "${{ runner.os }}" != "Windows" ]; then
+            export CFLAGS="${CFLAGS:-} -ffile-prefix-map=${CARGO_HOME:-$HOME/.cargo}=. -ffile-prefix-map=$GITHUB_WORKSPACE=."
+          fi
           target="${{ matrix.target }}"
           if [ -n "$target" ]; then
             cargo build --release --manifest-path rust/Cargo.toml --target "$target"
