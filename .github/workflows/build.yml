@@ -81,6 +81,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The shipped binary must not carry the builder's paths (same rule as rust/scripts/build-dist.sh).
+          export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=./cargo --remap-path-prefix=$GITHUB_WORKSPACE=./"
           target="${{ matrix.target }}"
           if [ -n "$target" ]; then
             cargo build --release --manifest-path rust/Cargo.toml --target "$target"
@@ -95,6 +97,24 @@ jobs:
           set -euo pipefail
           mkdir -p dst
           name="decision-guard-${{ matrix.triple }}"
+
+      - name: Check no local paths (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          if [ -n "$target" ]; then
+            bin="rust/target/$target/release/decision-guard"
+          else
+            bin="rust/target/release/decision-guard"
+          fi
+          if strings -a "$bin" | grep -qE "/home/runner|/Users/runner|hostedtoolcache|$GITHUB_WORKSPACE"; then
+            echo "error: the binary embeds builder paths:" >&2
+            strings -a "$bin" | grep -E "/home/runner|/Users/runner|hostedtoolcache|$GITHUB_WORKSPACE" | head -3 >&2
+            exit 1
+          fi
+          echo "ok: no builder paths embedded"
           target="${{ matrix.target }}"
           if [ -n "$target" ]; then
             bin="rust/target/$target/release/decision-guard"
