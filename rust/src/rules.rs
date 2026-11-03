@@ -290,6 +290,7 @@ pub enum Stage {
     UserDeny,
     DirDelete,
     Exfiltration,
+    UserAsk,
     UserAllow,
     ReadOnly,
     Model,
@@ -302,6 +303,7 @@ impl Stage {
             Stage::UserDeny => "user-deny",
             Stage::DirDelete => "dir-delete",
             Stage::Exfiltration => "exfiltration",
+            Stage::UserAsk => "user-ask",
             Stage::UserAllow => "user-allow",
             Stage::ReadOnly => "read-only",
             Stage::Model => "model",
@@ -393,6 +395,15 @@ pub fn precheck(command: &str, cwd: &str, rules: &Rules) -> Precheck {
     if exfiltration(command).is_some() {
         return Precheck::at(Stage::Exfiltration, "exfiltration", Action::Ask);
     }
+    if let Some(entry) = rules.live.ask(command, &chain) {
+        return Precheck {
+            pattern: Some(entry.pattern.clone()),
+            live_hit_id: Some(entry.id),
+            reason: Some(format!("matches your ask pattern \"{}\"", entry.pattern)),
+            ..Precheck::at(Stage::UserAsk, "user-ask", Action::Ask)
+        };
+    }
+
 
     if rules.readonly {
         if let Some(reason) = crate::readonly::prove(command, cwd) {
@@ -793,5 +804,37 @@ mod tests {
                 "{c}"
             );
         }
+    }
+    fn rules_with_ask(ask: &[&str]) -> Rules {
+        let mut r = rules(&[], &[]);
+        let rows: Vec<(&str, Action)> = ask.iter().map(|p| (*p, Action::Ask)).collect();
+        r.live = Live::for_test(&rows);
+        r
+    }
+
+    #[test]
+    fn ask_rows_prompt_and_allow_cannot_override_them() {
+        let r = rules_with_ask(&["configure terminal*", "ssh *conf t*"]);
+        for cmd in ["configure terminal", "ssh router 'conf t'"] {
+            let p = precheck(cmd, "/work", &r);
+            assert_eq!(p.stage, Stage::UserAsk, "{cmd}");
+            assert_eq!(p.action, Some(Action::Ask), "{cmd}");
+            assert_eq!(p.rule, Some("user-ask"), "{cmd}");
+        }
+        for cmd in ["git commit -m x", "show running-config", "echo 'configure terminal'"] {
+            assert_ne!(precheck(cmd, "/work", &r).stage, Stage::UserAsk, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn an_allow_entry_never_skips_an_ask_entry() {
+        let mut both = rules(&["configure terminal"], &[]);
+        both.live = Live::for_test(&[
+            ("configure terminal*", Action::Ask),
+            ("configure terminal", Action::Allow),
+        ]);
+        let p = precheck("configure terminal", "/work", &both);
+        assert_eq!(p.stage, Stage::UserAsk);
+        assert_eq!(p.action, Some(Action::Ask));
     }
 }

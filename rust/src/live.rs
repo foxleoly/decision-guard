@@ -40,7 +40,30 @@ CREATE TABLE IF NOT EXISTS rules (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS rules_unique ON rules (pattern, action, source, COALESCE(cwd, ''));
 CREATE INDEX IF NOT EXISTS rules_lookup ON rules (enabled, action);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ";
+/// The built-in ask pack: commands that change a network device (router, switch, firewall), at its own CLI or
+/// sent through ssh/telnet/a scripting client. Imported once as `source = 'pack'` rows, so every entry can be
+/// edited, disabled or deleted in the viewer, and new ones added with `decision-guard rules add` — no rebuild.
+pub const NET_PACK: &[(&str, &str)] = &[
+    ("configure terminal*", "network device: configuration mode"),
+    ("conf t*", "network device: configuration mode (short form)"),
+    ("system-view*", "network device: configuration mode (Huawei/H3C)"),
+    ("write erase*", "network device: erase startup-config"),
+    ("erase startup-config*", "network device: erase startup-config"),
+    ("erase running-config*", "network device: erase running-config"),
+    ("copy running-config startup-config*", "network device: save running-config"),
+    ("write memory*", "network device: save running-config"),
+    ("reset saved-configuration*", "network device: erase saved configuration"),
+    ("factory-reset*", "network device: factory reset"),
+    ("no shutdown*", "network device: bring an interface up"),
+    ("ssh *configure terminal*", "network device: configuration over ssh"),
+    ("ssh *conf t*", "network device: configuration over ssh"),
+    ("telnet *conf t*", "network device: configuration over telnet"),
+    ("*send_config_set(*", "network device: configuration from a netmiko script"),
+];
+const PACK_VERSION: &str = "1";
+
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
@@ -186,6 +209,42 @@ impl Live {
             .find(|e| glob_match(&e.pattern, &normalized) || chain.iter().any(|part| glob_match(&e.pattern, part)))
     }
 
+    /// Ask is loose like deny: the whole command or any single command of a chain. It sits after the fixed
+    /// deny/delete/exfiltration rules and before the allow list, so an ask entry can never talk the guard out of
+    /// a refusal, and an allow entry can never skip the prompt.
+    pub fn ask(&self, command: &str, chain: &[String]) -> Option<&Entry> {
+        let normalized = normalize(command);
+        self.entries
+            .iter()
+            .filter(|e| e.action == Action::Ask)
+            .find(|e| glob_match(&e.pattern, &normalized) || chain.iter().any(|part| glob_match(&e.pattern, part)))
+    }
+
+    /// Entries for a test, without a database.
+    #[cfg(test)]
+    pub fn for_test(rows: &[(&str, Action)]) -> Live {
+        let now = iso_now();
+        Live {
+            entries: rows
+                .iter()
+                .enumerate()
+                .map(|(i, (pattern, action))| Entry {
+                    id: i as i64 + 1,
+                    pattern: (*pattern).to_string(),
+                    action: *action,
+                    source: "gui".into(),
+                    note: None,
+                    created_at: now.clone(),
+                    hit_count: 0,
+                    last_hit_at: None,
+                    enabled: true,
+                    expires_at: None,
+                    cwd: None,
+                })
+                .collect(),
+        }
+    }
+
     /// Allow is strict: the whole command, and only when there is nothing that could chain or substitute.
     pub fn allow(&self, command: &str) -> Option<&Entry> {
         let normalized = normalize(command);
@@ -203,6 +262,7 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
     conn.execute_batch(SCHEMA)?;
+    let _ = seed_packs(&conn);
     let _ = fsx::restrict(path);
     Ok(conn)
 }
@@ -231,6 +291,31 @@ pub fn import_config(conn: &Connection, allow: &[String], deny: &[String]) -> ru
             added += changed;
         }
     }
+    Ok(added)
+}
+
+/// Imports the built-in packs once. The version is recorded in `meta`, so an entry the user deleted stays
+/// deleted — a later release that wants to add a pattern must bump `PACK_VERSION`.
+pub fn seed_packs(conn: &Connection) -> rusqlite::Result<usize> {
+    let done: Option<String> = conn
+        .query_row("SELECT value FROM meta WHERE key = 'pack:network'", [], |r| r.get(0))
+        .optional()?;
+    if done.is_some() {
+        return Ok(0);
+    }
+    let now = iso_now();
+    let mut added = 0;
+    for (pattern, note) in NET_PACK {
+        added += conn.execute(
+            "INSERT OR IGNORE INTO rules (pattern, action, source, note, created_at)
+             VALUES (?1, 'ask', 'pack', ?2, ?3)",
+            params![pattern, note, now],
+        )?;
+    }
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('pack:network', ?1)",
+        params![PACK_VERSION],
+    )?;
     Ok(added)
 }
 
@@ -374,8 +459,8 @@ mod tests {
         assert_eq!(import_config(&conn, &allow, &deny).unwrap(), 2);
         assert_eq!(import_config(&conn, &allow, &deny).unwrap(), 0, "second import adds nothing");
         let live = Live::from_conn(&conn).unwrap();
-        assert_eq!(live.entries.len(), 2);
-        assert!(live.entries.iter().all(|e| e.source == "builtin"));
+        let builtin: Vec<_> = live.entries.iter().filter(|e| e.source == "builtin").collect();
+        assert_eq!(builtin.len(), 2);
         assert!(live.deny("rm -rf x", &[]).is_some());
         assert!(live.allow("git status -s").is_some());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -417,7 +502,7 @@ mod tests {
         let id = add(&conn, "git status*", Action::Allow, None, None, None).unwrap();
         bump(&conn, id).unwrap();
         bump(&conn, id).unwrap();
-        let entry = &all(&conn).unwrap()[0];
+        let entry = all(&conn).unwrap().into_iter().find(|e| e.id == id).unwrap();
         assert_eq!(entry.hit_count, 2);
         assert!(entry.last_hit_at.is_some());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -428,8 +513,9 @@ mod tests {
         let path = temp("hit-through-precheck");
         let conn = open(&path).unwrap();
         let id = add(&conn, "cargo test*", Action::Allow, None, None, None).unwrap();
-        assert_eq!(all(&conn).unwrap()[0].hit_count, 0);
-        assert!(all(&conn).unwrap()[0].last_hit_at.is_none());
+        let entry = all(&conn).unwrap().into_iter().find(|e| e.id == id).unwrap();
+        assert_eq!(entry.hit_count, 0);
+        assert!(entry.last_hit_at.is_none());
 
         // The real path: load the live rows, match a command, bump the matched entry.
         let live = Live::from_conn(&conn).unwrap();
@@ -437,9 +523,40 @@ mod tests {
         assert_eq!(entry.id, id);
         bump(&conn, entry.id).unwrap();
 
-        let after = all(&conn).unwrap();
-        assert_eq!(after[0].hit_count, 1);
-        assert!(after[0].last_hit_at.is_some());
+        let after = all(&conn).unwrap().into_iter().find(|e| e.id == id).unwrap();
+        assert_eq!(after.hit_count, 1);
+        assert!(after.last_hit_at.is_some());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+    #[test]
+    fn the_network_pack_imports_once_and_stays_deleted() {
+        let path = temp("pack");
+        let count = |conn: &Connection| -> i64 {
+            conn.query_row("SELECT count(*) FROM rules WHERE source = 'pack'", [], |r| r.get(0))
+                .unwrap()
+        };
+        let conn = open(&path).unwrap();
+        assert_eq!(count(&conn) as usize, NET_PACK.len());
+        assert!(
+            conn.query_row("SELECT count(*) FROM rules WHERE source = 'pack' AND action = 'ask'", [], |r| r.get::<_, i64>(0))
+                .unwrap() as usize
+                == NET_PACK.len()
+        );
+        drop(conn);
+        let conn = open(&path).unwrap();
+        assert_eq!(count(&conn) as usize, NET_PACK.len(), "reopening must not duplicate");
+        conn.execute("DELETE FROM rules WHERE source = 'pack'", []).unwrap();
+        drop(conn);
+        let conn = open(&path).unwrap();
+        assert_eq!(count(&conn), 0, "a deleted pack entry must not come back");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn an_ask_row_matches_like_a_deny_row() {
+        let live = Live::for_test(&[("configure terminal*", Action::Ask)]);
+        assert!(live.ask("configure terminal", &[]).is_some());
+        assert!(live.ask("make x && configure terminal", &["make x".into(), "configure terminal".into()]).is_some());
+        assert!(live.ask("git commit -m x", &[]).is_none());
     }
 }

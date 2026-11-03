@@ -289,6 +289,17 @@ pub fn decide(command: &str, cwd: &str, agent: &str, ctx: &Context) -> Result<De
             };
             return Ok(finish(result, "rule", rule("exfiltration"), &calls));
         }
+        Stage::UserAsk => {
+            record_live_hit(pre.live_hit_id);
+            let result = Decision {
+                reason: Some(format!(
+                    "decision-guard: this command matches your ask pattern \"{}\"; approval is never remembered",
+                    pre.pattern.as_deref().unwrap_or("")
+                )),
+                ..plain(Action::Ask)
+            };
+            return Ok(finish(result, "rule", rule("user-ask"), &calls));
+        }
         Stage::UserAllow => {
             record_live_hit(pre.live_hit_id);
             return Ok(finish(

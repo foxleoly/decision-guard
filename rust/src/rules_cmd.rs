@@ -87,11 +87,12 @@ fn list(conn: &rusqlite::Connection, args: &[String]) -> Result<(), String> {
 fn add(conn: &rusqlite::Connection, args: &[String]) -> Result<(), String> {
     let pattern = opt(args, "--pattern")?
         .or_else(|| args.iter().find(|a| !a.starts_with("--")).map(String::as_str))
-        .ok_or("usage: rules add <pattern> --action allow|deny [--note TEXT] [--days N] [--cwd PATH]")?;
+        .ok_or("usage: rules add <pattern> --action allow|ask|deny [--note TEXT] [--days N] [--cwd PATH]")?;
     let action = match opt(args, "--action")?.unwrap_or("allow") {
         "allow" => Action::Allow,
+        "ask" => Action::Ask,
         "deny" => Action::Deny,
-        other => return Err(format!("--action must be allow or deny, not {other}")),
+        other => return Err(format!("--action must be allow, ask or deny, not {other}")),
     };
     let expires = match opt(args, "--days")? {
         Some(days) => {
