@@ -10,6 +10,21 @@ Claude Code, Codex, Copilot CLI, OpenCode, Pi and OMP.
 - **Everything is logged**: every decision, its latency and the raw API request/response, in a local SQLite file with a
   built-in web viewer.
 
+## At a glance
+
+The binary is `~/.decision-guard/bin/decision-guard` (installed by `scripts/install.sh`; not on your `PATH`
+unless you add it). Everything below works once that install and a decision service are in place.
+
+| You want to | How | Details |
+|---|---|---|
+| Install, and wire up every agent found on this machine | `scripts/install.sh` (preview with `--dry-run`) | [Install](#install) |
+| Choose the decision service | `~/.decision-guard/key` (OpenAI), or `~/.decision-guard/config.json` with `base_url`/`model` (your own server) | [Choose the decision service](#choose-the-decision-service) |
+| Add, list or remove allow/deny/ask rules | `decision-guard rules add "git push*" --action deny` · `decision-guard rules list` · `decision-guard rules remove <id>` | [Your own allow/deny rules](#your-own-allowdeny-rules) |
+| See how a command will be decided, without a model or a log row | `printf 'git status\nmake all\n' \| decision-guard check` | [Read-only fast path](#read-only-fast-path) |
+| Review decisions and edit rules in the browser | `decision-guard web`, then open `http://127.0.0.1:8765/` | [Web viewer](#web-viewer) |
+| Switch between configured services | `decision-guard service pplx-decider` | [Choose the decision service](#choose-the-decision-service) |
+| Uninstall | the block in [Uninstall](#uninstall) | |
+
 ## Quick start
 
 ```bash
@@ -110,6 +125,7 @@ the system libraries, and SQLite is built in, so there is no runtime to install)
 | `decision-guard archive [--keep-days N] [--dry-run] [--db PATH] [--out DIR]` | The weekly log archive (see ["Archive"](#archive-a-weekly-clean-up)) |
 | `decision-guard check [--no-config]` | Dry-runs one command per line (or JSON lines) through the deterministic stages and prints the stage that decides; no model, no cache, no log row (see ["Read-only fast path"](#read-only-fast-path)) |
 | `decision-guard service [<name>] [--config PATH]` | Lists the services `config.json` names under `services` and switches which one `active` points at. With no name it only prints, and writes nothing |
+| `decision-guard rules list\|add\|remove\|enable\|disable\|export\|import` | The live rules from a terminal: `add <pattern> --action allow\|ask\|deny [--note TEXT] [--days N] [--cwd PATH]`, `remove <id>`, `enable <id>`, `disable <id>`; `export` and `import` move lists as one JSON. Same store the web viewer edits, so the two cannot drift apart |
 
 Why a binary: every command an agent runs waits for the hook. The earlier Node hook took 97.8 ms on the deny path and
 99.5 ms on the allow path; the binary takes 7.3 ms and 8.9 ms (median of 20 runs each).
@@ -495,6 +511,10 @@ before saving.
 - Each entry must be 1–200 characters with at least 3 literal (non-`*`) characters, no control characters, and allow
   entries must start with a literal command word (not `*`). An entry cannot be in both lists. At most 200 entries per
   list. The web viewer and the guard use the exact same validation and matching code, so they cannot drift apart.
+A third action, `ask`, stops a matching command for approval with no model call; it is the action the
+network-config patterns use. From a terminal, `decision-guard rules add|list|remove|enable|disable|export|import`
+edits the same live store the web viewer edits.
+
 
 ## Audit log
 
@@ -509,7 +529,7 @@ fails a command. Logging never needs anything installed: SQLite is built into th
 | `agent` | `claude`, `codex`, `copilot`, `opencode` or `pi` (Pi and OMP share one adapter) |
 | `cwd`, `command` | Where and what, verbatim |
 | `source` | `rule` (a deterministic rule), `cache`, `api`, `no_service`, `error` |
-| `rule` | Which rule fired when `source` is `rule`: `denylist`, `user-deny`, `dir-delete`, `exfiltration`, `allowlist` or `readonly` |
+| `rule` | Which rule fired when `source` is `rule`: `denylist`, `user-deny`, `dir-delete`, `exfiltration`, `allowlist`, `user-ask` or `readonly` |
 | `provider`, `model` | Which service and model answered: `openai`, or the host of your base URL |
 | `choice`, `confidence`, `probabilities` | The model's verdict (empty for `rule`, `no_service`, `error`) |
 | `user_requested` | Probability the user's own message asked for it; only measured when the model would have asked |
@@ -619,6 +639,11 @@ about, denied or could not judge, and for editing the rules above:
 ~/.decision-guard/bin/decision-guard web            # then open http://127.0.0.1:8765/
 ~/.decision-guard/bin/decision-guard web --port 9000
 ```
+
+![The dashboard](docs/web-viewer-dashboard.png)
+
+The viewer is on demand, not a resident service: run the command, open the URL it prints, and it stops when the
+process ends.
 
 The page follows the look of the claudegate dashboard (header bar with tabs, collapsible panels, light and dark theme):
 
